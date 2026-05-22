@@ -145,6 +145,13 @@ private:
     uint32_t _cursorTick = 0;
     bool     _cursorOn   = true;
 
+    // ---- ambient animation for empty state + streaming indicator ----
+    uint32_t _animTick   = 0;
+    uint32_t _animPhase  = 0;
+
+    // ---- empty-state renderer ----
+    void renderEmptyChat();
+
     // ---- offscreen body buffer ----
     M5Canvas _bodyCanvas;
     bool     _canvasOk = false;

@@ -110,6 +110,19 @@ void ChatScreen::tick() {
         renderCursorOnly();
     }
 
+    // Ambient animation. Empty chat -> drives watermark motion. Streaming
+    // -> drives the dot indicator. Anything else is idle (no refresh).
+    bool emptyChat = (_mode == Mode::Chat && !_streaming && _conv.size() == 0);
+    if (emptyChat && (millis() - _animTick) > 80) {
+        _animTick = millis();
+        _animPhase++;
+        _bodyDirty = true;
+    } else if (_streaming && (millis() - _animTick) > 180) {
+        _animTick = millis();
+        _animPhase++;
+        _inputDirty = true;
+    }
+
     if (_statusDirty) { renderStatus(); _statusDirty = false; }
     if (_bodyDirty)   { renderBody();   _bodyDirty   = false; }
     if (_inputDirty)  { renderInput();  _inputDirty  = false; }
@@ -199,10 +212,11 @@ void ChatScreen::pollKeyboard() {
 // ============================================================================
 
 void ChatScreen::onCharPressed(char c, bool fn) {
-    // Fn + top-left key (`'`' / '~'`) acts as ESC: toggles the menu from
-    // chat, closes the menu, or backs out of any submodal. Bare ` and ~
-    // still type normally so they're available as text in chat input.
-    if (fn && (c == '`' || c == '~')) {
+    // Top-left key ('`' / '~') is wired as ESC. Bare or with Fn, both
+    // toggle the menu from chat / close it / back out of any submodal.
+    // Trade-off: '`' and '~' are not typeable in chat input. The system
+    // prompt enforces plain-text replies anyway.
+    if (c == '`' || c == '~') {
         if      (_mode == Mode::Chat) openMenu();
         else if (_mode == Mode::Menu) closeMenu();
         else                          onDel();
@@ -510,41 +524,70 @@ void ChatScreen::renderStatus() {
     M5Cardputer.Display.setFont(&fonts::Font0);
     M5Cardputer.Display.setTextSize(1);
 
+    // Right side: HH:MM · model.  Only includes time if NTP has synced.
+    String right;
+    struct tm t;
+    if (getLocalTime(&t, 5)) {
+        char b[8];
+        snprintf(b, sizeof(b), "%02d:%02d", t.tm_hour, t.tm_min);
+        right  = b;
+        right += " ";
+        right += (char)0x07;  // we'll color-swap via two prints below
+    }
+    // Render time + dot in dim, then label in accent so the eye lands on
+    // the model. Two-pass print so colors differ within a single line.
+    int rxRight = kScreenW - kPadX;
+    int labelW  = M5Cardputer.Display.textWidth(_models[_modelIdx].label);
     M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
-    const char* label = _models[_modelIdx].label;
-    int lw = M5Cardputer.Display.textWidth(label);
-    M5Cardputer.Display.setCursor(kScreenW - kPadX - lw, 2);
-    M5Cardputer.Display.print(label);
+    M5Cardputer.Display.setCursor(rxRight - labelW, 2);
+    M5Cardputer.Display.print(_models[_modelIdx].label);
+
+    if (right.length() > 0) {
+        right = String(right.substring(0, right.length() - 2)) + " . ";
+        int tw = M5Cardputer.Display.textWidth(right.c_str());
+        M5Cardputer.Display.setTextColor(kStatusDim, kBg);
+        M5Cardputer.Display.setCursor(rxRight - labelW - tw, 2);
+        M5Cardputer.Display.print(right);
+    }
 
     if (_mode != Mode::Chat) {
         const char* hint = "";
         switch (_mode) {
-            case Mode::Menu:        hint = "[menu]";    break;
-            case Mode::Picker:      hint = "[models]";  break;
-            case Mode::DepthPicker: hint = "[depth]";   break;
-            case Mode::Confirm:     hint = "[confirm]"; break;
-            case Mode::Info:        hint = _infoTitle.length() ? _infoTitle.c_str() : "[info]"; break;
+            case Mode::Menu:        hint = "menu";       break;
+            case Mode::Picker:      hint = "models";     break;
+            case Mode::DepthPicker: hint = "depth";      break;
+            case Mode::Confirm:     hint = "confirm";    break;
+            case Mode::Info:        hint = _infoTitle.length() ? _infoTitle.c_str() : "info"; break;
             default: break;
         }
         M5Cardputer.Display.setTextColor(kStatusDim, kBg);
         M5Cardputer.Display.setCursor(kPadX, 2);
+        M5Cardputer.Display.print("/");
+        M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
         M5Cardputer.Display.print(hint);
+    } else {
+        // Tiny LED-style dot in the corner when idle in chat.
+        M5Cardputer.Display.fillRect(kPadX, 4, 3, 3, kStatusAccent);
     }
 
-    // Restore display font for input
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
 }
 
 void ChatScreen::renderBody() {
     if (!_canvasOk) {
-        // No sprite buffer — fall back to direct draw, accept flicker
         M5Cardputer.Display.fillRect(0, bodyTop(), kScreenW, bodyHeight(), kBg);
         return;
     }
     _bodyCanvas.fillScreen(kBg);
+    // Hairline top frame inside the body region.
+    _bodyCanvas.drawLine(0, 0, kScreenW, 0, kDivider);
+
     switch (_mode) {
-        case Mode::Chat:        renderChatBody();    break;
+        case Mode::Chat:
+            if (_conv.size() == 0 && !_streaming) renderEmptyChat();
+            else                                   renderChatBody();
+            break;
         case Mode::Menu:        renderMenuBody();    break;
         case Mode::Picker:      renderPickerBody();  break;
         case Mode::DepthPicker: renderDepthBody();   break;
@@ -552,6 +595,47 @@ void ChatScreen::renderBody() {
         case Mode::Info:        renderInfoBody();    break;
     }
     _bodyCanvas.pushSprite(0, bodyTop());
+}
+
+void ChatScreen::renderEmptyChat() {
+    // Watermark wordmark, faint, upper third.
+    _bodyCanvas.setFont(&fonts::Font2);
+    _bodyCanvas.setTextSize(2);
+    _bodyCanvas.setTextColor(0x2104, kBg);
+    const char* wm = "CARDPUTER";
+    int ww = _bodyCanvas.textWidth(wm);
+    _bodyCanvas.setCursor((kScreenW - ww) / 2, 12);
+    _bodyCanvas.print(wm);
+
+    _bodyCanvas.setTextSize(1);
+    _bodyCanvas.setTextColor(0x4208, kBg);
+    const char* sub = "L  L  M";
+    int sw = _bodyCanvas.textWidth(sub);
+    _bodyCanvas.setCursor((kScreenW - sw) / 2, 44);
+    _bodyCanvas.print(sub);
+
+    // Drifting "scan line" — a thin dim horizontal that travels slowly.
+    int travel = bodyHeight() - 24;
+    int p      = (_animPhase / 3) % (travel * 2);
+    int yLine  = (p < travel) ? (12 + p) : (12 + (travel * 2 - p));
+    _bodyCanvas.drawLine(18, yLine, kScreenW - 18, yLine, 0x4208);
+    // A brighter pip on the line, drifting horizontally too for life.
+    int pipX = 18 + (_animPhase * 3) % (kScreenW - 36);
+    _bodyCanvas.fillRect(pipX - 1, yLine - 1, 3, 3, kStatusAccent);
+
+    // Bottom hint with blinking dot
+    _bodyCanvas.setFont(&fonts::Font0);
+    _bodyCanvas.setTextColor(kStatusDim, kBg);
+    String hint = "type to begin  /  esc for menu";
+    int hw = _bodyCanvas.textWidth(hint.c_str());
+    _bodyCanvas.setCursor((kScreenW - hw) / 2, bodyHeight() - 12);
+    _bodyCanvas.print(hint);
+    if ((_animPhase / 6) % 2 == 0) {
+        _bodyCanvas.fillRect((kScreenW - hw) / 2 - 8, bodyHeight() - 10, 3, 3, kStatusAccent);
+    }
+    // Restore default font
+    _bodyCanvas.setFont(&fonts::Font2);
+    _bodyCanvas.setTextSize(1);
 }
 
 void ChatScreen::buildLines(std::vector<Line>& out) {
@@ -599,7 +683,6 @@ void ChatScreen::renderChatBody() {
 
 void ChatScreen::renderMenuBody() {
     int lh = lineHeight() + 2;
-    // Visible window of items; scroll so the selection stays in view.
     int vis = (bodyHeight() - 6) / lh;
     if (vis < 1) vis = 1;
     int start = 0;
@@ -611,13 +694,15 @@ void ChatScreen::renderMenuBody() {
     for (int i = start; i < end; i++) {
         bool sel = (i == _menuSel);
         uint16_t color = sel ? kSelColor : kIdleColor;
+        if (sel) {
+            // bar-style selection marker, left-of-row
+            _bodyCanvas.fillRect(kPadX, y + 1, 3, lh - 4, kSelColor);
+        }
         _bodyCanvas.setTextColor(color, kBg);
-        _bodyCanvas.setCursor(kPadX, y);
-        _bodyCanvas.print(sel ? "> " : "  ");
+        _bodyCanvas.setCursor(kPadX + 9, y);
         _bodyCanvas.print(kMenuLabels[i]);
         y += lh;
     }
-    // Tiny scroll hint at right edge if there's more
     if (kMenuItemCount > vis) {
         _bodyCanvas.setTextColor(kStatusDim, kBg);
         if (start > 0) {
@@ -638,9 +723,9 @@ void ChatScreen::renderPickerBody() {
         bool sel = ((int)i == _pickerSel);
         bool cur = ((int)i == _modelIdx);
         uint16_t color = sel ? kSelColor : kIdleColor;
+        if (sel) _bodyCanvas.fillRect(kPadX, y + 1, 3, lh - 4, kSelColor);
         _bodyCanvas.setTextColor(color, kBg);
-        _bodyCanvas.setCursor(kPadX, y);
-        _bodyCanvas.print(sel ? "> " : "  ");
+        _bodyCanvas.setCursor(kPadX + 9, y);
         _bodyCanvas.print(_models[i].label);
         if (cur) {
             _bodyCanvas.setTextColor(kStatusDim, kBg);
@@ -661,9 +746,9 @@ void ChatScreen::renderDepthBody() {
         bool sel = (i == _depthSel);
         bool cur = (kDepthOptions[i] == _historyDepth);
         uint16_t color = sel ? kSelColor : kIdleColor;
+        if (sel) _bodyCanvas.fillRect(kPadX + 6, y + 1, 3, lh - 4, kSelColor);
         _bodyCanvas.setTextColor(color, kBg);
-        _bodyCanvas.setCursor(kPadX + 6, y);
-        _bodyCanvas.print(sel ? "> " : "  ");
+        _bodyCanvas.setCursor(kPadX + 15, y);
         _bodyCanvas.print(String(kDepthOptions[i]));
         if (cur) {
             _bodyCanvas.setTextColor(kStatusDim, kBg);
@@ -747,7 +832,9 @@ void ChatScreen::renderInput() {
         M5Cardputer.Display.print(shown);
 
         if (_streaming) {
-            const char* hint = "...";
+            // Animated pulsing dots: " .  " / "  . " / "   ." cycling.
+            static const char* kDotFrames[4] = {".  ", " . ", "  .", " . "};
+            const char* hint = kDotFrames[_animPhase % 4];
             int hw = M5Cardputer.Display.textWidth(hint);
             M5Cardputer.Display.setTextColor(kStreamHint, kBg);
             M5Cardputer.Display.setCursor(kScreenW - kPadX - hw, y + 3);

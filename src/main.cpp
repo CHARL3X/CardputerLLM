@@ -16,6 +16,7 @@
 #include "setup/key_setup.h"
 #include "ui/boot_ui.h"
 #include "ui/chat_screen.h"
+#include "ui/splash.h"
 
 using namespace ESPAI;
 
@@ -105,7 +106,9 @@ void setup() {
     uint32_t serialDeadline = millis() + 2000;
     while (!Serial && millis() < serialDeadline) delay(10);
     Serial.println();
-    Serial.println("[boot] cardputerllm phase 8.2 (onboarding flows)");
+    Serial.println("[boot] cardputerllm phase 8.3 (splash + empty state)");
+
+    splash::run();
 
     boot_ui::header("boot");
     boot_ui::footer("mounting sd...");
