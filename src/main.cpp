@@ -115,9 +115,17 @@ static OpenAICompatibleProvider* makeProvider(const String& apiKey) {
     return new OpenAICompatibleProvider(cfg);
 }
 
+static void logHeap(const char* tag) {
+    Serial.printf("[heap] %s free=%u min=%u largest=%u\n", tag,
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMinFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+}
+
 static void runBasicChat(OpenAICompatibleProvider& ai) {
     setFooter("test 1/2: basic chat...");
     Serial.println("[basic] sending...");
+    logHeap("pre-basic");
     clearBody();
 
     std::vector<Message> messages;
@@ -146,11 +154,13 @@ static void runBasicChat(OpenAICompatibleProvider& ai) {
         bodyPrint(String("http ") + r.httpStatus);
         setFooter("basic FAIL", TFT_RED);
     }
+    logHeap("post-basic");
 }
 
 static void runStreamingChat(OpenAICompatibleProvider& ai) {
     setFooter("test 2/2: streaming...");
     Serial.println("[stream] sending...");
+    logHeap("pre-stream");
     clearBody();
 
     std::vector<Message> messages;
@@ -182,6 +192,23 @@ static void runStreamingChat(OpenAICompatibleProvider& ai) {
         bodyPrint("\nERR stream failed");
         setFooter("stream FAIL", TFT_RED);
     }
+    logHeap("post-stream");
+}
+
+// Drain any key presses currently held so the next press is a clean edge.
+static void waitForKeyPress() {
+    // Wait for all keys released first.
+    while (true) {
+        M5Cardputer.update();
+        if (!M5Cardputer.Keyboard.isPressed()) break;
+        delay(20);
+    }
+    // Then wait for a press.
+    while (true) {
+        M5Cardputer.update();
+        if (M5Cardputer.Keyboard.isPressed()) return;
+        delay(20);
+    }
 }
 
 static void halt(const String& head, const String& foot) {
@@ -193,15 +220,19 @@ static void halt(const String& head, const String& foot) {
 
 void setup() {
     auto cfg = M5.config();
-    M5Cardputer.begin(cfg, false); // keyboard not needed this phase
+    M5Cardputer.begin(cfg, true); // keyboard enabled so we can retest without reflashing
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.fillScreen(TFT_BLACK);
 
     Serial.begin(115200);
-    delay(100);
+    // Wait up to 2s for the USB CDC host to enumerate so the first prints
+    // aren't lost. After 2s, proceed anyway.
+    uint32_t serialDeadline = millis() + 2000;
+    while (!Serial && millis() < serialDeadline) delay(10);
     Serial.println();
     Serial.println("[boot] cardputerllm phase 2 (sd creds)");
+    logHeap("boot");
 
     setHeader("phase 2 boot");
     setFooter("mounting sd...");
@@ -229,10 +260,15 @@ void setup() {
     }
 
     OpenAICompatibleProvider* ai = makeProvider(apiKey);
-    runBasicChat(*ai);
-    delay(1500);
-    runStreamingChat(*ai);
-    delete ai;
+
+    while (true) {
+        runBasicChat(*ai);
+        delay(1500);
+        runStreamingChat(*ai);
+        setFooter("any key: retest", TFT_DARKCYAN);
+        Serial.println("[idle] press any key on the cardputer to retest");
+        waitForKeyPress();
+    }
 }
 
 void loop() {
