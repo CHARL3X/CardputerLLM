@@ -9,5 +9,6 @@ build/
 # dist/ holds the SD-card-loadable .bin. Not committed; rebuild produces it.
 dist/
 
-# real secrets live in include/secrets.h; the .example template IS tracked.
-include/secrets.h
+# dist/sd/ holds the credential files that get copied onto the device's SD
+# card. Plaintext secrets in there. Never committed.
+# (top-level dist/ rule above already covers it; this comment is a flag.)

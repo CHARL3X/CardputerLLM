@@ -11,16 +11,27 @@ one BasicChat then one StreamingChat against `openai/gpt-4o-mini`, prints
 results to USB serial and streams tokens to the display body. No chat UI
 or keyboard input yet.
 
-## Secrets
+## Credentials live on the SD card, not in the binary
 
-Phase 2+ needs credentials. Edit `include/secrets.h` (gitignored) and
-set:
+Two plain-text files at the root of the microSD:
 
-    #define WIFI_SSID          "your-wifi"
-    #define WIFI_PASSWORD      "your-password"
-    #define OPENROUTER_API_KEY "sk-or-v1-..."
+`/openrouter.txt` (one line):
 
-Template lives at `include/secrets.h.example`. Do not commit real keys.
+    sk-or-v1-...
+
+`/wifi.txt` (ssid then password, one per line; pairs tried in order):
+
+    MyHomeNetwork
+    mypassword
+    BackupNetwork
+    backuppassword
+
+Lines starting with `#` are ignored. The compiled `dist/CardputerLLM.bin`
+contains no credentials; pull the chip and dump flash and you get nothing.
+
+The `dist/sd/` folder is the local staging area for the SD card. It is
+gitignored. Copy `dist/sd/openrouter.txt`, `dist/sd/wifi.txt`, and
+`dist/CardputerLLM.bin` to the SD card; install the `.bin` via Launcher.
 
 ## Build
 

@@ -1,22 +1,24 @@
-// CardputerLLM phase 2: ESPAI proof against OpenRouter.
+// CardputerLLM phase 2 (with phase-3 SD config pulled in):
+// ESPAI proof against OpenRouter, with credentials loaded from SD card.
 //
-// Connects WiFi, makes one non-streaming chat call (BasicChat), then one
-// streaming chat call (chatStream). Prints everything to USB serial AND
-// streams to the display body so we can confirm both paths work end to end
-// without a keyboard or full chat UI.
+// At boot:
+//   1. Mount SD.
+//   2. Read /openrouter.txt (single line, the API key).
+//   3. Read /wifi.txt (ssid/password line pairs, tried in order).
+//   4. Connect to the first WiFi that associates.
+//   5. Run one BasicChat against openai/gpt-4o-mini, dump to serial + screen.
+//   6. Run one chatStream against the same model, stream tokens to serial
+//      + screen live.
 //
-// Test model: openai/gpt-4o-mini via OpenRouter. Cheap, fast, OK signal.
-// Final model slugs are picked in Phase 7.
-//
-// On failure: surface the error verbatim. Do not silently swap providers or
-// fall back to non-streaming. If this phase fails to stream, the project
-// pivots to a hand-rolled SSE client; the spec is explicit about that.
+// On any failure: surface the error verbatim on screen and serial. Do not
+// silently fall back. If streaming fails, the spec says pivot to a
+// hand-rolled SSE client; document in NOTES.md and tag phase-2-streaming-failed.
 
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <ESPAI.h>
 
-#include "secrets.h"
+#include "storage/sd_config.h"
 
 using namespace ESPAI;
 
@@ -25,9 +27,9 @@ static constexpr int kScreenH = 135;
 static constexpr int kHeaderH = 12;
 static constexpr int kFooterH = 12;
 
-static constexpr const char* kBaseUrl  = "https://openrouter.ai/api/v1/chat/completions";
+static constexpr const char* kBaseUrl   = "https://openrouter.ai/api/v1/chat/completions";
 static constexpr const char* kTestModel = "openai/gpt-4o-mini";
-static constexpr const char* kPrompt   = "Say hi to the Cardputer in one short sentence.";
+static constexpr const char* kPrompt    = "Say hi to the Cardputer in one short sentence.";
 
 static int bodyY      = kHeaderH + 2;
 static int bodyCursor = bodyY;
@@ -39,22 +41,20 @@ static void clearBody() {
     M5Cardputer.Display.setCursor(2, bodyCursor);
 }
 
-static void setHeader(const String& msg) {
-    M5Cardputer.Display.fillRect(0, 0, kScreenW, kHeaderH, TFT_NAVY);
-    M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_NAVY);
+static void setHeader(const String& msg, uint16_t bg = TFT_NAVY) {
+    M5Cardputer.Display.fillRect(0, 0, kScreenW, kHeaderH, bg);
+    M5Cardputer.Display.setTextColor(TFT_WHITE, bg);
     M5Cardputer.Display.setCursor(2, 2);
     M5Cardputer.Display.print(msg);
 }
 
-static void setFooter(const String& msg, uint16_t color = TFT_DARKGREY) {
-    M5Cardputer.Display.fillRect(0, kScreenH - kFooterH, kScreenW, kFooterH, color);
-    M5Cardputer.Display.setTextColor(TFT_BLACK, color);
+static void setFooter(const String& msg, uint16_t bg = TFT_DARKGREY) {
+    M5Cardputer.Display.fillRect(0, kScreenH - kFooterH, kScreenW, kFooterH, bg);
+    M5Cardputer.Display.setTextColor(TFT_BLACK, bg);
     M5Cardputer.Display.setCursor(2, kScreenH - kFooterH + 2);
     M5Cardputer.Display.print(msg);
 }
 
-// Stream-friendly body print. Wraps at screen width, advances cursor,
-// scrolls by clearing when we hit the bottom.
 static void bodyPrint(const String& chunk) {
     M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     for (size_t i = 0; i < chunk.length(); i++) {
@@ -75,34 +75,42 @@ static void bodyPrint(const String& chunk) {
     }
 }
 
-static bool connectWiFi() {
-    setHeader("WiFi: connecting...");
-    Serial.print("[wifi] connecting to "); Serial.println(WIFI_SSID);
+static bool tryWiFi(const String& ssid, const String& pw, uint32_t timeoutMs) {
+    setHeader(String("WiFi: ") + ssid);
+    Serial.printf("[wifi] try '%s'\n", ssid.c_str());
+    WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-        delay(250);
-        Serial.print('.');
-        attempts++;
+    WiFi.begin(ssid.c_str(), pw.c_str());
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - t0) < timeoutMs) {
+        delay(200);
     }
-    Serial.println();
-    if (WiFi.status() != WL_CONNECTED) {
-        setHeader("WiFi: FAILED");
-        Serial.println("[wifi] FAILED");
-        return false;
-    }
-    String ip = WiFi.localIP().toString();
-    setHeader(String("WiFi: ") + ip);
-    Serial.print("[wifi] ok, ip="); Serial.println(ip);
-    return true;
+    return WiFi.status() == WL_CONNECTED;
 }
 
-static OpenAICompatibleProvider* makeProvider() {
+static bool connectWiFiFromList(const std::vector<WiFiCred>& creds) {
+    if (creds.empty()) {
+        Serial.println("[wifi] no creds in /wifi.txt");
+        return false;
+    }
+    for (auto& c : creds) {
+        if (tryWiFi(c.ssid, c.password, 12000)) {
+            String ip = WiFi.localIP().toString();
+            setHeader(String("WiFi ok: ") + ip);
+            Serial.printf("[wifi] connected on '%s' ip=%s\n",
+                          c.ssid.c_str(), ip.c_str());
+            return true;
+        }
+        Serial.printf("[wifi] timeout on '%s'\n", c.ssid.c_str());
+    }
+    return false;
+}
+
+static OpenAICompatibleProvider* makeProvider(const String& apiKey) {
     OpenAICompatibleConfig cfg;
     cfg.name    = "OpenRouter";
     cfg.baseUrl = kBaseUrl;
-    cfg.apiKey  = OPENROUTER_API_KEY;
+    cfg.apiKey  = apiKey;
     cfg.model   = kTestModel;
     return new OpenAICompatibleProvider(cfg);
 }
@@ -117,14 +125,14 @@ static void runBasicChat(OpenAICompatibleProvider& ai) {
     ChatOptions options;
     options.maxTokens = 64;
 
-    unsigned long t0 = millis();
-    Response r = ai.chat(messages, options);
-    unsigned long dt = millis() - t0;
+    uint32_t t0 = millis();
+    Response r  = ai.chat(messages, options);
+    uint32_t dt = millis() - t0;
 
     if (r.success) {
         Serial.println("[basic] OK:");
         Serial.println(r.content);
-        Serial.printf("[basic] %lums, prompt=%d, completion=%d, total=%d\n",
+        Serial.printf("[basic] %ums, prompt=%d, completion=%d, total=%d\n",
                       dt, r.promptTokens, r.completionTokens, r.totalTokens());
         bodyPrint(r.content);
         setFooter("basic ok " + String(dt) + "ms", TFT_DARKGREEN);
@@ -150,8 +158,8 @@ static void runStreamingChat(OpenAICompatibleProvider& ai) {
     ChatOptions options;
     options.maxTokens = 64;
 
-    unsigned long t0  = millis();
-    unsigned long tFt = 0;
+    uint32_t t0  = millis();
+    uint32_t tFt = 0;
     int chunks = 0;
 
     bool ok = ai.chatStream(messages, options,
@@ -161,9 +169,9 @@ static void runStreamingChat(OpenAICompatibleProvider& ai) {
             Serial.print(chunk);
             bodyPrint(chunk);
             if (done) {
-                unsigned long dt = millis() - t0;
+                uint32_t dt = millis() - t0;
                 Serial.println();
-                Serial.printf("[stream] done. %lums total, %lums ttft, %d chunks\n",
+                Serial.printf("[stream] done. %ums total, %ums ttft, %d chunks\n",
                               dt, tFt, chunks);
                 setFooter(String("stream ok ttft=") + tFt + "ms", TFT_DARKGREEN);
             }
@@ -176,6 +184,13 @@ static void runStreamingChat(OpenAICompatibleProvider& ai) {
     }
 }
 
+static void halt(const String& head, const String& foot) {
+    setHeader(head, TFT_MAROON);
+    setFooter(foot, TFT_RED);
+    Serial.printf("[halt] %s | %s\n", head.c_str(), foot.c_str());
+    while (true) delay(1000);
+}
+
 void setup() {
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, false); // keyboard not needed this phase
@@ -186,24 +201,34 @@ void setup() {
     Serial.begin(115200);
     delay(100);
     Serial.println();
-    Serial.println("[boot] cardputerllm phase 2: espai proof");
+    Serial.println("[boot] cardputerllm phase 2 (sd creds)");
 
     setHeader("phase 2 boot");
-    setFooter("idle");
+    setFooter("mounting sd...");
 
-    if (strlen(WIFI_SSID) == 0 || strlen(OPENROUTER_API_KEY) == 0) {
-        setHeader("missing secrets.h");
-        setFooter("fill include/secrets.h", TFT_RED);
-        Serial.println("[boot] secrets.h is empty. fill in WIFI_SSID/WIFI_PASSWORD/OPENROUTER_API_KEY and rebuild.");
-        return;
+    if (!sdcfg::begin()) {
+        halt("SD: mount failed", "insert sd card");
     }
 
-    if (!connectWiFi()) {
-        setFooter("wifi failed", TFT_RED);
-        return;
+    String apiKey = sdcfg::loadOpenRouterKey();
+    if (apiKey.length() == 0) {
+        halt("missing /openrouter.txt", "put key on sd");
+    }
+    if (!apiKey.startsWith("sk-or-")) {
+        Serial.println("[sd] warn: api key does not start with sk-or-");
     }
 
-    OpenAICompatibleProvider* ai = makeProvider();
+    auto creds = sdcfg::loadWiFi();
+    if (creds.empty()) {
+        halt("missing /wifi.txt", "put ssid+pw pairs on sd");
+    }
+    Serial.printf("[sd] %u wifi candidates loaded\n", (unsigned)creds.size());
+
+    if (!connectWiFiFromList(creds)) {
+        halt("wifi: all failed", "check /wifi.txt");
+    }
+
+    OpenAICompatibleProvider* ai = makeProvider(apiKey);
     runBasicChat(*ai);
     delay(1500);
     runStreamingChat(*ai);

@@ -54,24 +54,37 @@ Power switch OFF, hold G0, plug USB-C, release G0.
 - That USB CDC enumerates and shows up as a serial device immediately
   on Phase 1 boot (the `DARDUINO_USB_CDC_ON_BOOT=1` flag should ensure it).
 
-## Phase 2: ESPAI proof against OpenRouter
+## Phase 2 (with phase-3 SD config absorbed): ESPAI proof against OpenRouter
 
 ### Decisions
 
 - Provider: `OpenAICompatibleProvider` pointed at
   `https://openrouter.ai/api/v1/chat/completions` with `openai/gpt-4o-mini`
   as the test model. Slugs are finalized in Phase 7.
-- Credentials: `include/secrets.h` (gitignored) with `WIFI_SSID`,
-  `WIFI_PASSWORD`, `OPENROUTER_API_KEY`. `include/secrets.h.example` is
-  committed as the template.
+- Credentials are NOT compiled into the binary. They live on the SD card
+  as plain text:
+    - `/openrouter.txt` (single line, the API key)
+    - `/wifi.txt` (ssid, password, ssid, password, ... line pairs)
+  Charles asked to skip the secrets.h hardcode step. The Phase 3 SD-config
+  work is absorbed into Phase 2 since the same `sdcfg` module serves both.
+- Multiple SSIDs supported. Connects to the first one in `/wifi.txt` that
+  associates, with a 12s timeout per candidate.
 - Phase 2 main.cpp does NOT enable the M5Cardputer keyboard. Pure
-  network-and-display proof. Saves a tiny amount of code and isolates the
-  variable under test.
+  network-and-display proof; keyboard wakes up in Phase 5.
 - Test sequence: BasicChat then StreamingChat. Both print full response,
   token counts, timing, and any error code to USB serial; tokens also
   stream to the display body so we can confirm both paths visually.
-- Flash usage 454kB total. Small because the ESP32-S3 WiFi/BT firmware
-  lives in chip ROM; we only need the thin Arduino wrapper.
+- SD card SPI pins (M5Cardputer / ADV docs): SCK G40, MISO G39, MOSI G14,
+  CS G12, 25 MHz. Lives on a different SPI bus than the display, no
+  contention.
+- Flash usage 1.13MB now (was 454kB in phase 1). Jump is from pulling in
+  WiFi, mbedTLS, SD/FAT, ESPAI's HTTP+SSE stack.
+
+### Local staging area
+
+`dist/sd/` holds the credential files that get copied onto the device's
+SD card alongside `dist/CardputerLLM.bin`. It is gitignored. Plaintext
+secrets in there; treat the folder accordingly.
 
 ### To verify on hardware
 
