@@ -376,6 +376,54 @@ accepts a value.
 - WiFi scan is synchronous (~2-5s). Async would let us animate but
   complicates state. Skip.
 
+## Phase 8.5: slash commands, RSSI, boot readout, markdown layer
+
+### Markdown coexistence
+
+System prompt instructs the model not to use markdown, but real-world
+models slip. Added a defensive pre-pass `markdownToTags()` in
+`styled_text.cpp` that runs before block/inline parsing. Converts:
+
+- `**bold**` -> `[h]bold[/h]`
+- `*italic*` -> `[v]italic[/v]`
+- `` `code` `` -> `[k]code[/k]`
+- `# Heading` (and `##`, `###`) -> `<<Heading>>`
+- `* item` / `1. item` -> `- item`
+- ` ```code``` ` is passed through unchanged (already our syntax)
+
+Conservative on bounds (max span 80-120 chars, must not cross newlines for
+inline) so non-tag uses of `*` and `` ` `` don't false-positive too often.
+
+### Slash commands
+
+All dispatched through `ChatScreen::handleSlashCommand()`. None of them
+hit the API. List in README. The unknown-command fallback echoes the
+typed command back with an `[!]unknown[/!]` reply so the user sees what
+the parser thought it was.
+
+### Status row: RSSI + periodic refresh
+
+In Chat mode the status row now shows 4 stair-stepped bars next to the
+LED dot, mapped from `WiFi.RSSI()` thresholds: -85/-75/-65/-55 dBm.
+Status row marks itself dirty every 5s so time + bars stay live without
+needing input.
+
+### Boot readout
+
+`boot_ui::startLog()` + `boot_ui::step(label, ok, detail)` + `finishLog()`.
+Replaces the original plain `header("boot"); footer("mounting sd...")`
+sequence. Each step prints `label .... [ok]` with dim dotted leader and
+green [ok] or red [!!] indicator, plus an optional detail line in Font0.
+~110ms pacing per step. ~1-2s total. After the splash (~1.6s) the user
+sees a clear diagnostic log of what the device is doing.
+
+If a setup flow runs (wifi setup, key setup), control returns to main
+which then restarts the boot log to keep visual continuity.
+
+### /splash easter egg
+
+Replays the cold-boot wordmark sequence on demand. Cheap delight.
+
 ## Phase 3+ deferrals
 
 - Battery percentage readout math on the ADV (1750mAh, different topology
