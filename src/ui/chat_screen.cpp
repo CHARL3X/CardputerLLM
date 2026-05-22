@@ -1,6 +1,9 @@
 #include "chat_screen.h"
 #include "../storage/chat_store.h"
+#include "../storage/sd_config.h"
 #include "../storage/settings.h"
+#include "../setup/wifi_setup.h"
+#include "../setup/key_setup.h"
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <time.h>
@@ -33,13 +36,15 @@ constexpr int kDepthOptions[] = {5, 10, 20, 40, 60};
 constexpr int kDepthCount     = sizeof(kDepthOptions) / sizeof(int);
 
 // Menu items (charles-curated set)
-constexpr int kMenuItemCount = 7;
+constexpr int kMenuItemCount = 9;
 const char* const kMenuLabels[kMenuItemCount] = {
     "models",
     "new chat",
     "history depth",
     "system prompt",
     "wifi info",
+    "add wifi",
+    "set api key",
     "diagnostics",
     "exit",
 };
@@ -276,9 +281,28 @@ void ChatScreen::onEnter() {
                     openInfoScreen("system prompt"); break;
             case 4: buildWiFiLines();
                     openInfoScreen("wifi info"); break;
-            case 5: buildDiagnosticsLines();
+            case 5: { // add wifi: run scan/pick/connect flow with cancel allowed
+                bool added = wifi_setup::run(/*allowCancel=*/true);
+                Serial.printf("[menu] add wifi -> %s\n", added ? "saved" : "cancelled");
+                _mode = Mode::Menu;
+                _statusDirty = _bodyDirty = _inputDirty = true;
+                break;
+            }
+            case 6: { // set api key: web-form flow with cancel allowed
+                if (key_setup::run(/*allowCancel=*/true)) {
+                    String k = sdcfg::loadOpenRouterKey();
+                    if (k.length() > 0) {
+                        _ai->setApiKey(k);
+                        Serial.println("[menu] api key updated");
+                    }
+                }
+                _mode = Mode::Menu;
+                _statusDirty = _bodyDirty = _inputDirty = true;
+                break;
+            }
+            case 7: buildDiagnosticsLines();
                     openInfoScreen("diagnostics"); break;
-            case 6: closeMenu(); break;
+            case 8: closeMenu(); break;
         }
         return;
     }

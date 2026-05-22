@@ -77,4 +77,27 @@ void ensureChatsDir() {
     if (!SD.exists("/CardputerLLM/chats")) SD.mkdir("/CardputerLLM/chats");
 }
 
+bool saveApiKey(const String& key) {
+    if (!SD.exists("/CardputerLLM")) SD.mkdir("/CardputerLLM");
+    // FILE_WRITE truncates an existing file in Arduino's SD library.
+    File f = SD.open("/CardputerLLM/openrouter.txt", FILE_WRITE);
+    if (!f) return false;
+    f.println(key);
+    f.close();
+    return true;
+}
+
+bool appendWiFiCred(const String& ssid, const String& password) {
+    if (!SD.exists("/CardputerLLM")) SD.mkdir("/CardputerLLM");
+    File f = SD.open("/CardputerLLM/wifi.txt", FILE_APPEND);
+    if (!f) return false;
+    // Defensive blank line so we don't accidentally fuse with a prior
+    // non-newline-terminated tail.
+    f.println();
+    f.println(ssid);
+    f.println(password);
+    f.close();
+    return true;
+}
+
 } // namespace sdcfg

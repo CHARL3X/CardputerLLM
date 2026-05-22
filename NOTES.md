@@ -292,6 +292,90 @@ must be <= 15 chars). Default 20, range clamped to [2, 200]. Persists
 across reboots and across reflashes (NVS is wiped only by Launcher's
 "clear NVS" option or `nvs_flash_erase()`).
 
+## Phase 8 cycle 2: onboarding flows (wifi setup + web key entry)
+
+### Why
+
+Original boot required Charles-prepped SD with `/CardputerLLM/wifi.txt`
+and `openrouter.txt`. Fine for me, bad for anyone the firmware ships to.
+This cycle adds in-app onboarding so a first-time user can flash, insert
+SD, boot, and get to chat without ever touching a text editor.
+
+### Boot decision tree
+
+```
+boot
+  SD mount fail -> halt
+  load /CardputerLLM/wifi.txt
+    empty OR all entries fail to associate -> wifi_setup::run(false)
+      scans, lists, password input, connect, append to wifi.txt
+  ntp sync
+  load /CardputerLLM/openrouter.txt
+    empty -> key_setup::run(false)
+      starts HTTP server on port 80
+      shows http://<ip> on screen
+      user pastes key from another device, server validates sk-or- prefix,
+      saves, stops
+  chat ready
+```
+
+Backwards compat: with both files populated and a known SSID in range,
+flow is identical to prior cycles. New paths only fire when the file is
+missing/empty or wifi fails.
+
+### Modules
+
+- `src/setup/wifi_setup.{h,cpp}` — scan/list/password-input UI. Plain
+  arrow keys navigate (no Fn) because the modal owns the screen. Long
+  SSIDs truncated; RSSI shown right-aligned; lock indicator (`*`) for
+  secured networks. `r` rescans. `del` from empty pw = back to list.
+  Hold-to-repeat on backspace during password entry.
+- `src/setup/key_setup.{h,cpp}` — WebServer on :80, serves a small form
+  page (amber-on-dark CSS to match the device aesthetic), validates the
+  posted key has the `sk-or-` prefix, persists to SD, stops. Device
+  screen shows the IP prominently while waiting.
+- `src/ui/boot_ui.{h,cpp}` — shared direct-draw helpers (header, footer,
+  centerText, waitForAnyKey) reused by both setups.
+- `src/storage/sd_config.{h,cpp}` — added `saveApiKey()` (overwrite) and
+  `appendWiFiCred()` (append; preserves existing entries so they keep
+  acting as a fallback).
+
+### Menu integration
+
+Two new items so the user can change creds without ejecting the SD:
+
+- "add wifi"      -> wifi_setup::run(true). Cancel returns to chat.
+- "set api key"   -> key_setup::run(true). On success applies via
+                     `provider->setApiKey()` without rebuilding the
+                     provider. Cancel returns to chat.
+
+Final menu (9 items): models, new chat, history depth, system prompt,
+wifi info, add wifi, set api key, diagnostics, exit.
+
+### Trust model for the key form
+
+The web server is HTTP, no auth, and listens on whatever LAN the device
+just joined. Risk: anyone else on the LAN during the setup window can
+POST to /key and set the device's key. Mitigation: the server is up only
+while no key is present (boot path) or while the user explicitly
+triggered "set api key" from the menu (transient). Once a key is saved
+the server stops. Attack window equals setup duration. Acceptable for
+personal use; documented for transparency.
+
+Not added (deferred to phase 9 stretch): TOTP-style pairing code shown
+on the Cardputer that must be entered on the web form before /key
+accepts a value.
+
+### Style decisions
+
+- Setup screens use direct draw, not the canvas. One-time, flicker fine.
+- Password input shows the actual characters (no masking). Personal
+  device, small screen, verification matters more than shoulder-surf
+  defense.
+- Scan list shows only the strongest AP per SSID (dedupe).
+- WiFi scan is synchronous (~2-5s). Async would let us animate but
+  complicates state. Skip.
+
 ## Phase 3+ deferrals
 
 - Battery percentage readout math on the ADV (1750mAh, different topology

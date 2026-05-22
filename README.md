@@ -11,29 +11,56 @@ one BasicChat then one StreamingChat against `openai/gpt-4o-mini`, prints
 results to USB serial and streams tokens to the display body. No chat UI
 or keyboard input yet.
 
+## First boot (no SD prep)
+
+You can flash and run without preparing the SD at all. On first boot
+the device will:
+
+1. Show a WiFi scan, you pick a network and type the password on the
+   Cardputer keyboard.
+2. After WiFi connects, show a URL like `http://192.168.x.x`. Open it
+   on your phone or computer and paste your OpenRouter key into the form.
+3. Both creds are saved to `/CardputerLLM/wifi.txt` and
+   `/CardputerLLM/openrouter.txt` automatically.
+
+Subsequent boots are silent: stored creds load, device associates,
+chat is ready.
+
 ## Credentials live on the SD card, not in the binary
 
-All app files go in a `/CardputerLLM/` folder on the microSD so the root
-stays clean for Launcher's own folders (`/downloads/`, etc).
+The compiled `dist/CardputerLLM.bin` contains no credentials. Dump the
+flash and you get nothing.
+
+If you'd rather pre-populate the SD instead of using the setup UI:
 
 `/CardputerLLM/openrouter.txt` (one line):
 
     sk-or-v1-...
 
 `/CardputerLLM/wifi.txt` (ssid then password, one per line; pairs tried
-in order):
+in order; lines starting with `#` are ignored):
 
     MyHomeNetwork
     mypassword
     BackupNetwork
     backuppassword
 
-Lines starting with `#` are ignored. The compiled `dist/CardputerLLM.bin`
-contains no credentials; dump the flash and you get nothing.
+`dist/sd/CardputerLLM/` is a local staging area (gitignored) if you
+want to mirror files onto the card.
 
-`dist/sd/CardputerLLM/` is the local staging area. Gitignored. Mirror it
-onto the SD card as `/CardputerLLM/`. The `.bin` itself goes wherever
-Launcher expects (typically `/downloads/`).
+## Changing creds later
+
+From the chat screen, press `Fn+S` to open the menu:
+- "add wifi" runs the same scan/pick/password flow and appends to wifi.txt
+- "set api key" spins up the same web form so you can paste a new key
+
+## Trust note for the web form
+
+The key entry page is HTTP on port 80 with no auth. It only runs while
+no key is present (boot) or while you explicitly invoked "set api key"
+(transient). Anyone on the same LAN during that window could submit a
+key. Acceptable for personal use; do the initial setup on a network
+you control.
 
 ## Build
 

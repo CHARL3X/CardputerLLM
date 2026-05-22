@@ -30,4 +30,13 @@ String loadSystemPrompt();
 // Ensures /CardputerLLM/chats/ exists. Idempotent.
 void ensureChatsDir();
 
+// Overwrites /CardputerLLM/openrouter.txt with the supplied key (single line).
+// Returns false if SD write failed.
+bool saveApiKey(const String& key);
+
+// Appends an (ssid, password) pair to /CardputerLLM/wifi.txt. Creates the
+// file if missing. Existing pairs are preserved; new pair is added at the
+// end so it acts as a fallback to whatever was configured earlier.
+bool appendWiFiCred(const String& ssid, const String& password);
+
 } // namespace sdcfg
