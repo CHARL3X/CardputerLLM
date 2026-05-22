@@ -37,6 +37,53 @@ constexpr uint16_t kIdleColor   = 0xEF7D;
 constexpr int kDepthOptions[] = {5, 10, 20, 40, 60};
 constexpr int kDepthCount     = sizeof(kDepthOptions) / sizeof(int);
 
+// Slash command catalog. `wantsArgs` controls whether Tab-completion
+// inserts a trailing space so the user can keep typing the argument.
+struct SlashCmd {
+    const char* name;       // "/demo"
+    const char* desc;       // shown in popup
+    bool        wantsArgs;
+};
+
+constexpr SlashCmd kSlashCmds[] = {
+    {"/help",   "show commands",        false},
+    {"/clear",  "wipe conversation",    false},
+    {"/demo",   "preview formatting",   false},
+    {"/save",   "force save to sd",     false},
+    {"/sys",    "show system prompt",   false},
+    {"/diag",   "diagnostics",          false},
+    {"/splash", "replay splash",        false},
+    {"/model",  "switch model <name>",  true},
+    {"/depth",  "history depth <n>",    true},
+};
+constexpr int kSlashCmdCount = sizeof(kSlashCmds) / sizeof(kSlashCmds[0]);
+
+// Fuzzy in-order match. Returns 0 if not all query chars appear in cmd
+// in order; else returns a positive score (higher = better).
+int fuzzyScore(const String& query, const char* cmd) {
+    int qi = 0;
+    int score = 0;
+    int prevMatched = -2;
+    const int qn = (int)query.length();
+    const int cn = (int)strlen(cmd);
+    if (qn == 0) return 1;
+    for (int i = 0; i < cn && qi < qn; i++) {
+        char qc = (char)tolower(query.charAt(qi));
+        char cc = (char)tolower(cmd[i]);
+        if (qc == cc) {
+            score += 10;
+            if (i == 0)                score += 30;     // matches at start
+            if (i == prevMatched + 1)  score += 20;     // consecutive
+            prevMatched = i;
+            qi++;
+        }
+    }
+    if (qi < qn) return 0;
+    // Shorter commands score slightly higher (less padding)
+    score += (16 - cn);
+    return score;
+}
+
 // Menu items (charles-curated set)
 constexpr int kMenuItemCount = 9;
 const char* const kMenuLabels[kMenuItemCount] = {
@@ -179,6 +226,14 @@ void ChatScreen::pollKeyboard() {
     // Enter rising only
     if (s.enter && !_prevEnter) onEnter();
 
+    // Tab rising: autocomplete to selected slash suggestion
+    if (s.tab && !_prevTab) {
+        if (_mode == Mode::Chat && _suggVisible && !_suggMatches.empty()) {
+            completeSuggestion();
+        }
+    }
+    _prevTab = s.tab;
+
     // Fn+scroll hold-repeat
     auto fnHas = [&](char target) {
         if (!s.fn) return false;
@@ -241,11 +296,30 @@ void ChatScreen::onCharPressed(char c, bool fn) {
             }
             if (c == 'm' || c == 'M') { openPicker(Mode::Chat); return; }
             if (c == 's' || c == 'S') { openMenu(); return; }
-            if (c == ',' || c == ';') { scrollUp();   return; }
-            if (c == '.' || c == '/') { scrollDown(); return; }
+            // Fn+arrows: context-aware. When the slash autocomplete popup
+            // is visible, arrows navigate suggestions; otherwise they
+            // scroll the chat history.
+            if (c == ',' || c == ';') {
+                if (_suggVisible && _suggMatches.size() > 1) {
+                    if (_suggSel > 0) { _suggSel--; _inputDirty = true; }
+                } else {
+                    scrollUp();
+                }
+                return;
+            }
+            if (c == '.' || c == '/') {
+                if (_suggVisible && _suggMatches.size() > 1) {
+                    if (_suggSel + 1 < (int)_suggMatches.size()) { _suggSel++; _inputDirty = true; }
+                } else {
+                    scrollDown();
+                }
+                return;
+            }
             return; // swallow other Fn+x so the bare char doesn't show up in input
         }
         _input += c;
+        if (_input.startsWith("/")) updateSuggestions();
+        else                        { _suggVisible = false; _suggMatches.clear(); }
         _inputDirty = true;
         return;
     }
@@ -284,6 +358,8 @@ void ChatScreen::onDel() {
     if (_mode == Mode::Chat) {
         if (_input.length() > 0) {
             _input.remove(_input.length() - 1);
+            if (_input.startsWith("/")) updateSuggestions();
+            else                        { _suggVisible = false; _suggMatches.clear(); }
             _inputDirty = true;
         }
         return;
@@ -299,7 +375,17 @@ void ChatScreen::onEnter() {
     if (_mode == Mode::Chat) {
         if (_input.length() == 0) return;
         // Local slash commands: never sent to API.
-        if (_input.charAt(0) == '/' && handleSlashCommand(_input)) return;
+        if (_input.charAt(0) == '/') {
+            // Trim trailing space (e.g. "/demo ") so exact match works.
+            String trimmed = _input;
+            trimmed.trim();
+            _suggVisible = false;
+            _suggMatches.clear();
+            if (handleSlashCommand(trimmed)) {
+                _input = "";
+                return;
+            }
+        }
         sendCurrent();
         return;
     }
@@ -493,6 +579,43 @@ void ChatScreen::addLocalExchange(const String& userMsg, const String& assistant
     _input = "";
     _scrollOffset = 0; _autoScroll = true;
     _bodyDirty = _inputDirty = true;
+}
+
+void ChatScreen::updateSuggestions() {
+    _suggMatches.clear();
+    if (!_input.startsWith("/")) {
+        _suggVisible = false;
+        return;
+    }
+    String q = _input.substring(1);
+    // If the user has typed a space (entering args), match only on the
+    // command portion before the space so the popup still highlights it.
+    int sp = q.indexOf(' ');
+    if (sp >= 0) q = q.substring(0, sp);
+
+    std::vector<std::pair<int,int>> scored;
+    for (int i = 0; i < kSlashCmdCount; i++) {
+        // Score against the command minus its leading '/'
+        int score = fuzzyScore(q, kSlashCmds[i].name + 1);
+        if (score > 0) scored.push_back({i, score});
+    }
+    std::sort(scored.begin(), scored.end(),
+              [](const std::pair<int,int>& a, const std::pair<int,int>& b){
+                  return a.second > b.second;
+              });
+    for (auto& p : scored) _suggMatches.push_back(p.first);
+
+    _suggVisible = !_suggMatches.empty();
+    if (_suggSel >= (int)_suggMatches.size()) _suggSel = 0;
+}
+
+void ChatScreen::completeSuggestion() {
+    if (_suggMatches.empty()) return;
+    const SlashCmd& c = kSlashCmds[_suggMatches[_suggSel]];
+    _input = String(c.name);
+    if (c.wantsArgs) _input += " ";
+    updateSuggestions();
+    _inputDirty = true;
 }
 
 String ChatScreen::buildDiagSummary() const {
@@ -1006,7 +1129,71 @@ void ChatScreen::renderInfoBody() {
     }
 }
 
+void ChatScreen::renderSuggestions() {
+    if (!_suggVisible || _mode != Mode::Chat) return;
+    const int rowH = 10;        // Font0 line height + 2
+    const int padInner = 3;     // top padding inside popup
+    const int padBottom = 3;
+    int visCount = std::min(4, (int)_suggMatches.size());
+    int popupH = padInner + visCount * rowH + padBottom;
+
+    // Anchored just above the input row
+    const int popupY = kScreenH - kInputH - popupH;
+
+    M5Cardputer.Display.fillRect(0, popupY, kScreenW, popupH, kBg);
+    M5Cardputer.Display.drawLine(0, popupY, kScreenW, popupY, kAsstColor); // top hairline in amber
+
+    // Scroll window so the selected item stays visible
+    int start = 0;
+    if (_suggSel >= visCount) start = _suggSel - visCount + 1;
+    int end = std::min<int>(start + visCount, (int)_suggMatches.size());
+
+    M5Cardputer.Display.setFont(&fonts::Font0);
+    M5Cardputer.Display.setTextSize(1);
+
+    for (int i = start; i < end; i++) {
+        int row = i - start;
+        int y = popupY + padInner + row * rowH;
+        bool sel = (i == _suggSel);
+        const SlashCmd& c = kSlashCmds[_suggMatches[i]];
+
+        // selection bar
+        if (sel) M5Cardputer.Display.fillRect(2, y + 1, 3, rowH - 3, kAsstColor);
+
+        // command
+        M5Cardputer.Display.setTextColor(sel ? kAsstColor : kUserColor, kBg);
+        M5Cardputer.Display.setCursor(8, y + 1);
+        M5Cardputer.Display.print(c.name);
+
+        // description in dim
+        M5Cardputer.Display.setTextColor(kStatusDim, kBg);
+        // Align descriptions to a fixed column for tidy rows
+        int descX = 60;
+        M5Cardputer.Display.setCursor(descX, y + 1);
+        M5Cardputer.Display.print(c.desc);
+    }
+
+    // scroll hints if more above/below
+    if (start > 0) {
+        M5Cardputer.Display.setTextColor(kStatusDim, kBg);
+        M5Cardputer.Display.setCursor(kScreenW - 8, popupY + padInner);
+        M5Cardputer.Display.print("^");
+    }
+    if (end < (int)_suggMatches.size()) {
+        M5Cardputer.Display.setTextColor(kStatusDim, kBg);
+        M5Cardputer.Display.setCursor(kScreenW - 8, popupY + popupH - rowH);
+        M5Cardputer.Display.print("v");
+    }
+
+    // Restore body font default
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+}
+
 void ChatScreen::renderInput() {
+    // Slash autocomplete sits just above the input row.
+    renderSuggestions();
+
     const int y = kScreenH - kInputH;
     M5Cardputer.Display.fillRect(0, y, kScreenW, kInputH, kBg);
     M5Cardputer.Display.drawLine(0, y, kScreenW, y, kDivider);

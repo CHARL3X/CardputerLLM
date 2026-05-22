@@ -157,6 +157,15 @@ private:
     void addLocalExchange(const String& userMsg, const String& assistantMsg);
     String buildDiagSummary() const;
 
+    // ---- slash autocomplete ----
+    void updateSuggestions();
+    void renderSuggestions();
+    void completeSuggestion();
+    std::vector<int> _suggMatches;
+    int  _suggSel     = 0;
+    bool _suggVisible = false;
+    bool _prevTab     = false;
+
     // ---- periodic status row refresh (for RSSI/time updates) ----
     uint32_t _statusTick = 0;
 
