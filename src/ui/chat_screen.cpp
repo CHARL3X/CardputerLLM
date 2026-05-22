@@ -2,6 +2,7 @@
 #include "../storage/chat_store.h"
 #include "../storage/sd_config.h"
 #include "../storage/settings.h"
+#include "../storage/snapshot.h"
 #include "../setup/wifi_setup.h"
 #include "../setup/key_setup.h"
 #include "styled_text.h"
@@ -49,6 +50,7 @@ constexpr SlashCmd kSlashCmds[] = {
     {"/help",   "show commands",        false},
     {"/clear",  "wipe conversation",    false},
     {"/demo",   "preview formatting",   false},
+    {"/snap",   "screenshot to sd",     false},
     {"/save",   "force save to sd",     false},
     {"/sys",    "show system prompt",   false},
     {"/diag",   "diagnostics",          false},
@@ -639,6 +641,18 @@ bool ChatScreen::handleSlashCommand(const String& cmd) {
         Serial.println("[slash] /clear");
         return true;
     }
+    // /snap : capture full screen to SD as BMP
+    if (cmd == "/snap") {
+        String name = snapshot::captureToBMP();
+        if (name.length() > 0) {
+            String r = "[ok]snapshot saved[/ok]\n[k]file[/k] [v]/CardputerLLM/snaps/";
+            r += name; r += "[/v]";
+            addLocalExchange(cmd, r);
+        } else {
+            addLocalExchange(cmd, "[!]snap failed[/!]\n[?]readback may be unsupported[/?]");
+        }
+        return true;
+    }
     // /splash : replay the boot wordmark sequence (easter egg)
     if (cmd == "/splash") {
         splash::run();
@@ -680,6 +694,7 @@ bool ChatScreen::handleSlashCommand(const String& cmd) {
             "[k]/help[/k]    show this list\n"
             "[k]/clear[/k]   wipe conversation\n"
             "[k]/demo[/k]    preview formatting\n"
+            "[k]/snap[/k]    screenshot to sd\n"
             "[k]/save[/k]    force save to sd\n"
             "[k]/sys[/k]     show system prompt\n"
             "[k]/diag[/k]    diagnostics\n"
@@ -956,18 +971,35 @@ void ChatScreen::renderEmptyChat() {
     int pipX = 18 + (_animPhase * 3) % (kScreenW - 36);
     _bodyCanvas.fillRect(pipX - 1, yLine - 1, 3, 3, kStatusAccent);
 
-    // Bottom hint with blinking dot, two-line if room
+    // Bottom hint, two-line. Top stays static; bottom rotates through
+    // tips so each empty-state session reveals different features.
     _bodyCanvas.setFont(&fonts::Font0);
-    _bodyCanvas.setTextColor(kStatusDim, kBg);
+
     String hint1 = "type to begin  /  esc for menu";
+    _bodyCanvas.setTextColor(kStatusDim, kBg);
     int hw1 = _bodyCanvas.textWidth(hint1.c_str());
     _bodyCanvas.setCursor((kScreenW - hw1) / 2, bodyHeight() - 22);
     _bodyCanvas.print(hint1);
-    String hint2 = "try /demo to preview formatting";
+
+    static const char* kTips[] = {
+        "type / for command suggestions",
+        "tab completes a slash command",
+        "Fn+M switches models",
+        "Fn+N starts a new chat",
+        "/demo previews formatting",
+        "/snap saves a screenshot",
+        "/sys shows the system prompt",
+        "/diag for a status readout",
+    };
+    constexpr int kTipCount = sizeof(kTips) / sizeof(kTips[0]);
+    // ~80ms per phase tick, change tip every ~4.8s (60 phases)
+    int tipIdx = (_animPhase / 60) % kTipCount;
+    String hint2 = kTips[tipIdx];
     _bodyCanvas.setTextColor(0x4208, kBg);
     int hw2 = _bodyCanvas.textWidth(hint2.c_str());
     _bodyCanvas.setCursor((kScreenW - hw2) / 2, bodyHeight() - 11);
     _bodyCanvas.print(hint2);
+
     if ((_animPhase / 6) % 2 == 0) {
         _bodyCanvas.fillRect((kScreenW - hw1) / 2 - 8, bodyHeight() - 20, 3, 3, kStatusAccent);
     }
