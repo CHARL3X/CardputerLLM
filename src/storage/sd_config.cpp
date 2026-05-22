@@ -67,4 +67,14 @@ std::vector<WiFiCred> loadWiFi() {
     return out;
 }
 
+String loadSystemPrompt() {
+    String raw = readFileWhole("/CardputerLLM/system.txt");
+    return trimWS(raw);
+}
+
+void ensureChatsDir() {
+    if (!SD.exists("/CardputerLLM")) SD.mkdir("/CardputerLLM");
+    if (!SD.exists("/CardputerLLM/chats")) SD.mkdir("/CardputerLLM/chats");
+}
+
 } // namespace sdcfg

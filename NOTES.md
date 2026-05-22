@@ -144,6 +144,75 @@ that, revisit and add it as a stretch goal.
   currently dropped (not queued, contrary to spec); the spec's queue
   behavior requires async streaming which is Phase 8 polish.
 
+## Phase 6+7 cram (single cycle)
+
+### Bundle
+
+Phases 6 (history + persistence) and 7 (model picker) crammed into one
+cycle along with scrolling, hold-to-repeat for backspace, status row,
+and NTP. Charles asked to maximize work per flash.
+
+### Models (verified against live OpenRouter /api/v1/models)
+
+- `openai/gpt-5`                ctx 400k
+- `anthropic/claude-sonnet-4.5` ctx 1M   (default startup model)
+- `google/gemini-2.5-pro`       ctx 1M
+
+`anthropic/claude-3.5-sonnet` and `claude-3.7-sonnet` were checked and
+are NOT on OpenRouter currently. `google/gemini-pro-1.5` also not
+listed. Re-verify these slugs whenever OpenRouter rotates aliases; the
+list lives in `kModels` in `src/main.cpp`.
+
+### History + persistence
+
+- `ESPAI::Conversation(20)` owns the message list and prunes oldest pair
+  when over cap. System prompt held separately and prepended on each send.
+- System prompt: load `/CardputerLLM/system.txt` if present; fallback to
+  a built-in default that mentions screen geometry.
+- Each completed exchange is saved to
+  `/CardputerLLM/chats/YYYYMMDDTHHMMSSZ.json`. Filename is set on the
+  first user message of a session; subsequent saves overwrite the same
+  file so it always reflects the current state.
+- If NTP hasn't synced, filename falls back to `boot-<millis>.json`.
+
+### Shortcuts
+
+- `Fn+N` new chat (clears history, fresh filename)
+- `Fn+M` open model picker
+- `Fn+,` or `Fn+;` scroll up (hold to repeat, ~60ms cadence)
+- `Fn+.` or `Fn+/` scroll down (same)
+- Backspace held: keeps deleting (~50ms cadence)
+- In picker: arrows navigate, Enter selects (opens confirm), Del cancels
+- In confirm: Enter or `y` accepts, Del or `n` cancels
+
+Charles uses two arrow conventions (`,/.` and `;//`); both supported
+because I couldn't verify on hardware which the M5Cardputer keymap
+emits as "arrow" symbols when Fn is held.
+
+### Auto-scroll behavior
+
+`_scrollOffset` is lines-from-bottom. 0 means newest visible. Streaming
+chunks only repaint when `_autoScroll` is true (which is true iff offset
+is 0). User scrolling up sets `_autoScroll=false`; scrolling back to 0
+turns it on again. Sending a new message snaps to bottom and re-enables.
+
+### Status row
+
+Top 12px, no background fill. Right-aligned model label in warm amber
+using Font0 (6x8). Body returns to Font2 (8x16) after rendering. When in
+picker/confirm modes the left side shows a tiny `[picker]` / `[confirm]`
+hint.
+
+### Known rough edges (deferred to Phase 8 polish)
+
+- Body redraws fully on every streaming chunk; visible flicker. Move to
+  M5Canvas sprite to fix.
+- Scroll-up while assistant is still streaming feels stuck (we skip
+  repaint while not auto-scrolling). User intent here is ambiguous;
+  Phase 8 picks a behavior.
+- Model picker label format is hand-curated. Phase 8 might pull
+  display names from the /models response so they auto-update.
+
 ## Phase 3+ deferrals
 
 - Battery percentage readout math on the ADV (1750mAh, different topology

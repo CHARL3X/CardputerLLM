@@ -22,4 +22,12 @@ String loadOpenRouterKey();
 // in file order; main code should try them in sequence.
 std::vector<WiFiCred> loadWiFi();
 
+// Reads /CardputerLLM/system.txt and returns the trimmed contents. Empty
+// string if the file is missing, in which case the caller should fall
+// back to a built-in default.
+String loadSystemPrompt();
+
+// Ensures /CardputerLLM/chats/ exists. Idempotent.
+void ensureChatsDir();
+
 } // namespace sdcfg
