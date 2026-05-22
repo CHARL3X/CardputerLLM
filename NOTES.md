@@ -110,6 +110,40 @@ callback never fires with content: stop. Tag the commit
 `WiFiClientSecure` and an `ArduinoJson` streaming parser. Per spec, do
 NOT silently fall back to non-streaming.
 
+## Phase 4 skipped (interactive WiFi setup)
+
+Spec's Phase 4 was an on-device WiFi onboarding flow (scan SSIDs, type
+password via keyboard, save to NVS). Skipped: SD-based `/CardputerLLM/wifi.txt`
+with multi-SSID try-list already covers the use case for personal use.
+Adding interactive setup would matter only if the firmware were going to
+ship to a user who can't edit text files on the SD card. If we ever want
+that, revisit and add it as a stretch goal.
+
+## Phase 5: chat UI
+
+### Decisions
+
+- Replaced Phase 2 test harness with a single chat-screen module
+  (`src/ui/chat_screen.{h,cpp}`). main.cpp now only handles boot: SD,
+  credentials, WiFi, provider construction, then hands control to
+  ChatScreen.
+- Font: `&fonts::Font2` (8x16) at textSize 1. Gives ~30 columns x 7 rows
+  of conversation area. Default 6x8 was too small per Charles's feedback;
+  textSize 2 of default was too few columns.
+- Layout: assistant turns left-aligned in warm orange, user turns
+  right-aligned in cream/off-white. No `>` prefix. No header bar. Input
+  row at bottom with a thin dim divider, blinking cursor.
+- Phase 5 is single-turn: each Enter sends just the user's current
+  message, no prior history. Phase 6 adds history with the 20-message
+  cap.
+- Streaming chunks arrive in the chatStream callback and append to the
+  in-flight assistant turn; the body re-renders on each chunk so tokens
+  appear as they come. Flicker on each chunk is expected at this phase;
+  Phase 8 moves to a M5Canvas sprite for tear-free updates.
+- Enter is ignored while streaming. Keystrokes typed during streaming are
+  currently dropped (not queued, contrary to spec); the spec's queue
+  behavior requires async streaming which is Phase 8 polish.
+
 ## Phase 3+ deferrals
 
 - Battery percentage readout math on the ADV (1750mAh, different topology
