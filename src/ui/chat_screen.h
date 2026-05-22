@@ -110,7 +110,8 @@ private:
     ESPAI::Conversation _conv;
     String              _input;
     String              _sessionFile;
-    bool                _streaming   = false;
+    bool                _streaming    = false;
+    bool                _cancelStream = false;
     bool                _bodyDirty   = true;
     bool                _statusDirty = true;
     bool                _inputDirty  = true;

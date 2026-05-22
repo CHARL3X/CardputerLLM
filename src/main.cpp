@@ -17,6 +17,7 @@
 #include "ui/boot_ui.h"
 #include "ui/chat_screen.h"
 #include "ui/splash.h"
+#include "ui/welcome.h"
 
 using namespace ESPAI;
 
@@ -134,7 +135,11 @@ void setup() {
     uint32_t serialDeadline = millis() + 2000;
     while (!Serial && millis() < serialDeadline) delay(10);
     Serial.println();
-    Serial.println("[boot] cardputerllm phase 8.3 (splash + empty state)");
+    Serial.println("[boot] cardputerllm v1.1 (welcome + cancel + chime)");
+
+    // settings::begin() needs to land before splash so the boot chime
+    // setting is readable; it's NVS-only and SD-independent.
+    settings::begin();
 
     splash::run();
     boot_ui::startLog();
@@ -210,7 +215,6 @@ void setup() {
         boot_ui::step("api key", true, "loaded from sd");
     }
 
-    settings::begin();
     int depth = settings::historyDepth();
     boot_ui::step("history depth", true, String(depth) + " messages");
 
@@ -218,6 +222,12 @@ void setup() {
     boot_ui::step("openrouter", true, kModels[kInitialModelIdx].label);
 
     boot_ui::finishLog();
+
+    // First-run welcome: shown once per device, before chat handoff.
+    if (!settings::welcomed()) {
+        welcome::run();
+        settings::setWelcomed(true);
+    }
 
     g_chat = new ChatScreen(ai, sys, kModels, kInitialModelIdx, depth);
     g_chat->begin();

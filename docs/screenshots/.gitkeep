@@ -1,0 +1,10 @@
+# Screenshots captured via /snap on the device.
+# Copy from SD card /CardputerLLM/snaps/*.bmp into this folder; GitHub
+# renders BMPs inline in markdown. Suggested filenames:
+#
+#   splash.bmp        cold-boot wordmark
+#   empty.bmp         empty-state watermark + rotating tip
+#   chat.bmp          a styled assistant reply
+#   autocomplete.bmp  the slash command popup
+#   menu.bmp          Fn+S menu
+#   wifi.bmp          wifi scan list in the onboarding flow

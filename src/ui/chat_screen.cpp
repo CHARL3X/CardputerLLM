@@ -3,6 +3,7 @@
 #include "../storage/sd_config.h"
 #include "../storage/settings.h"
 #include "../storage/snapshot.h"
+#include "welcome.h"
 #include "../setup/wifi_setup.h"
 #include "../setup/key_setup.h"
 #include "styled_text.h"
@@ -47,16 +48,18 @@ struct SlashCmd {
 };
 
 constexpr SlashCmd kSlashCmds[] = {
-    {"/help",   "show commands",        false},
-    {"/clear",  "wipe conversation",    false},
-    {"/demo",   "preview formatting",   false},
-    {"/snap",   "screenshot to sd",     false},
-    {"/save",   "force save to sd",     false},
-    {"/sys",    "show system prompt",   false},
-    {"/diag",   "diagnostics",          false},
-    {"/splash", "replay splash",        false},
-    {"/model",  "switch model <name>",  true},
-    {"/depth",  "history depth <n>",    true},
+    {"/help",    "show commands",        false},
+    {"/clear",   "wipe conversation",    false},
+    {"/demo",    "preview formatting",   false},
+    {"/snap",    "screenshot to sd",     false},
+    {"/save",    "force save to sd",     false},
+    {"/sys",     "show system prompt",   false},
+    {"/diag",    "diagnostics",          false},
+    {"/splash",  "replay splash",        false},
+    {"/welcome", "replay welcome",       false},
+    {"/sound",   "boot sound on/off",    true},
+    {"/model",   "switch model <name>",  true},
+    {"/depth",   "history depth <n>",    true},
 };
 constexpr int kSlashCmdCount = sizeof(kSlashCmds) / sizeof(kSlashCmds[0]);
 
@@ -525,6 +528,7 @@ void ChatScreen::sendCurrent() {
     }
 
     _streaming    = true;
+    _cancelStream = false;
     _scrollOffset = 0;
     _autoScroll   = true;
     _bodyDirty    = _inputDirty = true;
@@ -551,16 +555,35 @@ void ChatScreen::sendCurrent() {
     bool ok = _ai->chatStream(messages, options,
         [&](const String& chunk, bool done) {
             chunks++;
-            auto& m = const_cast<std::vector<ESPAI::Message>&>(_conv.getMessages());
-            if (!m.empty()) m.back().content += chunk;
-            if (_autoScroll) renderBody();
+            // Cancellation: poll the keyboard between chunks. ESC keys
+            // ('`' / '~') or Backspace abort the visible stream. The
+            // underlying socket still drains (no clean async-cancel in
+            // ESPAI) but the UI stops appending tokens immediately.
+            if (!_cancelStream) {
+                M5Cardputer.update();
+                auto& s = M5Cardputer.Keyboard.keysState();
+                for (char c : s.word) {
+                    if (c == '`' || c == '~') { _cancelStream = true; break; }
+                }
+                if (s.del) _cancelStream = true;
+            }
+            if (!_cancelStream) {
+                auto& m = const_cast<std::vector<ESPAI::Message>&>(_conv.getMessages());
+                if (!m.empty()) m.back().content += chunk;
+                if (_autoScroll) renderBody();
+            }
             if (done) {
-                Serial.printf("[chat] done. %ums, %d chunks\n",
-                              (unsigned)(millis() - t0), chunks);
+                Serial.printf("[chat] done. %ums, %d chunks%s\n",
+                              (unsigned)(millis() - t0), chunks,
+                              _cancelStream ? " (cancelled)" : "");
             }
         });
 
-    if (!ok) {
+    if (_cancelStream) {
+        auto& m = const_cast<std::vector<ESPAI::Message>&>(_conv.getMessages());
+        if (!m.empty()) m.back().content += "\n[?]cancelled[/?]";
+        Serial.println("[chat] user cancelled stream");
+    } else if (!ok) {
         Serial.println("[chat] FAIL");
         auto& m = const_cast<std::vector<ESPAI::Message>&>(_conv.getMessages());
         if (!m.empty()) m.back().content += " [error]";
@@ -661,6 +684,31 @@ bool ChatScreen::handleSlashCommand(const String& cmd) {
         renderAll();
         return true;
     }
+    // /welcome : replay the first-run welcome screen
+    if (cmd == "/welcome") {
+        welcome::run();
+        _input = "";
+        _statusDirty = _bodyDirty = _inputDirty = true;
+        renderAll();
+        return true;
+    }
+    // /sound : toggle the boot chime
+    if (cmd.startsWith("/sound")) {
+        String arg = cmd.substring(6); arg.trim();
+        bool cur = settings::bootSound();
+        bool target;
+        if (arg.length() == 0)                              target = !cur;
+        else if (arg == "on" || arg == "1" || arg == "yes") target = true;
+        else if (arg == "off" || arg == "0" || arg == "no") target = false;
+        else {
+            addLocalExchange(cmd, "[!]usage: /sound on | off | toggle[/!]");
+            return true;
+        }
+        settings::setBootSound(target);
+        addLocalExchange(cmd, target ? "[ok]boot sound on[/ok]"
+                                     : "[?]boot sound off[/?]");
+        return true;
+    }
     // /demo : render every tag locally
     if (cmd == "/demo") {
         static const char* kDemo =
@@ -691,16 +739,20 @@ bool ChatScreen::handleSlashCommand(const String& cmd) {
     if (cmd == "/help" || cmd == "/?") {
         static const char* kHelp =
             "<<commands>>\n"
-            "[k]/help[/k]    show this list\n"
-            "[k]/clear[/k]   wipe conversation\n"
-            "[k]/demo[/k]    preview formatting\n"
-            "[k]/snap[/k]    screenshot to sd\n"
-            "[k]/save[/k]    force save to sd\n"
-            "[k]/sys[/k]     show system prompt\n"
-            "[k]/diag[/k]    diagnostics\n"
-            "[k]/splash[/k]  replay splash\n"
+            "[k]/help[/k]     show this list\n"
+            "[k]/clear[/k]    wipe conversation\n"
+            "[k]/demo[/k]     preview formatting\n"
+            "[k]/snap[/k]     screenshot to sd\n"
+            "[k]/save[/k]     force save to sd\n"
+            "[k]/sys[/k]      show system prompt\n"
+            "[k]/diag[/k]     diagnostics\n"
+            "[k]/splash[/k]   replay splash\n"
+            "[k]/welcome[/k]  replay welcome\n"
+            "[k]/sound[/k] on|off  boot chime\n"
             "[k]/model[/k] <name>  switch model\n"
             "[k]/depth[/k] <n>     history (2-200)\n"
+            "---\n"
+            "[?]press esc mid-stream to cancel[/?]\n"
             "---\n"
             "[?]commands run locally. no api call.[/?]";
         addLocalExchange(cmd, kHelp);

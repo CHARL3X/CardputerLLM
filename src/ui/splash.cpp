@@ -1,4 +1,5 @@
 #include "splash.h"
+#include "../storage/settings.h"
 #include <M5Cardputer.h>
 
 namespace {
@@ -39,6 +40,15 @@ namespace splash {
 void run() {
     M5Cardputer.Display.fillScreen(kBg);
     M5Cardputer.Display.setFont(&fonts::Font2);
+
+    // 0) Brief ascending boot chime, opt-out via /sound or settings.
+    if (settings::bootSound()) {
+        M5Cardputer.Speaker.setVolume(40);
+        M5Cardputer.Speaker.tone(523,  70);  delay(80);   // C5
+        M5Cardputer.Speaker.tone(659,  70);  delay(80);   // E5
+        M5Cardputer.Speaker.tone(784,  70);  delay(80);   // G5
+        M5Cardputer.Speaker.tone(1047, 110); delay(120);  // C6
+    }
 
     // 1) Corner brackets ease in
     drawCorners(kDim);

@@ -31,6 +31,39 @@ web key entry), markup dialect with markdown coexistence, model picker,
 persistent history, slash commands with fuzzy autocomplete, polished
 splash and empty-state animations.
 
+## Screenshots
+
+Capture on-device with `/snap`. The 240x135 BMPs land in
+`/CardputerLLM/snaps/` on the SD card; copy them into
+`docs/screenshots/` here and they render inline below.
+
+<table>
+<tr>
+  <td><img src="docs/screenshots/splash.bmp" width="240"></td>
+  <td><img src="docs/screenshots/empty.bmp" width="240"></td>
+</tr>
+<tr>
+  <td align="center"><sub>cold boot</sub></td>
+  <td align="center"><sub>empty state with rotating tips</sub></td>
+</tr>
+<tr>
+  <td><img src="docs/screenshots/chat.bmp" width="240"></td>
+  <td><img src="docs/screenshots/autocomplete.bmp" width="240"></td>
+</tr>
+<tr>
+  <td align="center"><sub>styled chat reply</sub></td>
+  <td align="center"><sub>slash autocomplete popup</sub></td>
+</tr>
+<tr>
+  <td><img src="docs/screenshots/menu.bmp" width="240"></td>
+  <td><img src="docs/screenshots/wifi.bmp" width="240"></td>
+</tr>
+<tr>
+  <td align="center"><sub>menu</sub></td>
+  <td align="center"><sub>wifi onboarding</sub></td>
+</tr>
+</table>
+
 ## Hardware
 
 - M5Stack Cardputer ADV (ESP32-S3FN8 via Stamp-S3A, 8 MB flash, no PSRAM)
@@ -102,12 +135,22 @@ add wifi, set api key, diagnostics, exit.
 | `/help` | list these |
 | `/clear` | wipe the current conversation |
 | `/demo` | render every formatting tag locally |
+| `/snap` | save a BMP screenshot to SD |
 | `/save` | force-save the current chat to SD |
 | `/sys` | show the active system prompt |
 | `/diag` | diagnostics (model, wifi, heap, etc.) |
 | `/splash` | replay the boot wordmark |
+| `/welcome` | replay the first-run welcome |
+| `/sound on\|off` | boot chime toggle |
 | `/model <name>` | switch model by label or slug |
 | `/depth <n>` | set history depth (2..200) |
+
+### Mid-stream cancel
+
+While the assistant is streaming, press `` ` `` / `~` (Esc) or Backspace
+to abort. The visible reply stops growing and is marked `[?]cancelled[/?]`.
+The underlying HTTPS read finishes draining in the background (ESPAI
+doesn't expose async abort), but the UI returns control immediately.
 
 ## The markup dialect
 
