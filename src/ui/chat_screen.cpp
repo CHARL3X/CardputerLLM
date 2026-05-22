@@ -199,10 +199,10 @@ void ChatScreen::pollKeyboard() {
 // ============================================================================
 
 void ChatScreen::onCharPressed(char c, bool fn) {
-    // Top-left ESC key (prints '`' bare or '~' with shift). Global: toggles
-    // the menu from chat, closes the menu, or backs out of any submodal.
-    // Triggers with or without Fn held (charles's spec).
-    if (c == '`' || c == '~') {
+    // Fn + top-left key (`'`' / '~'`) acts as ESC: toggles the menu from
+    // chat, closes the menu, or backs out of any submodal. Bare ` and ~
+    // still type normally so they're available as text in chat input.
+    if (fn && (c == '`' || c == '~')) {
         if      (_mode == Mode::Chat) openMenu();
         else if (_mode == Mode::Menu) closeMenu();
         else                          onDel();
