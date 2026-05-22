@@ -6,4 +6,5 @@
 *.swp
 .DS_Store
 build/
+# dist/ holds the SD-card-loadable .bin. Not committed; rebuild produces it.
 dist/

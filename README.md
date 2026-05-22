@@ -15,13 +15,23 @@ PlatformIO required. From this directory:
 
     pio run
 
-## Flash
+## Deploy via Launcher (primary path)
 
-1. Power switch OFF.
-2. Hold the G0 button on the back.
-3. Plug USB-C.
-4. Release G0. Device is in download mode.
-5. `pio run -t upload`
+The Cardputer ADV runs [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher)
+as its persistent firmware. Each `pio run` drops an app-only binary at:
+
+    dist/CardputerLLM.bin
+
+Copy that file to the microSD card, insert into the Cardputer, and use
+Launcher's `SD` menu to install it. Launcher copies it into the device's
+app partition and launches it.
+
+SD card requirements (from Launcher docs):
+
+- SDHC, not SDXC
+- 32 GB or smaller
+- FAT32
+- MBR partition scheme
 
 ## Monitor
 
@@ -30,14 +40,17 @@ PlatformIO required. From this directory:
 USB CDC at 115200. Echo prints each pressed character; Enter prints the
 full buffered line as `[line] ...`.
 
-## SD-card delivery (eventual)
+## Direct USB flash (alternative, dev-only)
 
-The device will run [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher)
-as the persistent firmware. App `.bin` files go on the SD card and Launcher
-loads them into the running app partition. The build target is therefore
-an app-only `.bin`, not a merged bootloader+partitions blob.
+If you ever want to bypass Launcher and flash this build directly:
 
-For Phase 1 we flash directly over USB to confirm the toolchain.
+1. Power switch OFF.
+2. Hold the G0 button on the back.
+3. Plug USB-C.
+4. Release G0. Device is in download mode.
+5. `pio run -t upload`
+
+This will overwrite Launcher. Not the normal workflow.
 
 ## Name candidates
 
