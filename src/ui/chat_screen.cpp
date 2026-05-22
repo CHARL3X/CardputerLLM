@@ -1,6 +1,9 @@
 #include "chat_screen.h"
 #include "../storage/chat_store.h"
+#include "../storage/settings.h"
 #include <M5Cardputer.h>
+#include <WiFi.h>
+#include <time.h>
 
 namespace {
 
@@ -12,7 +15,7 @@ constexpr int kInputH  = 20;
 constexpr int kPadX    = 4;
 constexpr int kLinePad = 2;
 
-// Palette. Warm CRT, no terminal green, no slabby grey.
+// Palette
 constexpr uint16_t kBg          = 0x0000;
 constexpr uint16_t kDivider     = 0x2104;
 constexpr uint16_t kUserColor   = 0xEF7D;
@@ -20,40 +23,77 @@ constexpr uint16_t kAsstColor   = 0xFD60;
 constexpr uint16_t kInputColor  = 0xEF7D;
 constexpr uint16_t kCursorColor = 0xFD60;
 constexpr uint16_t kStreamHint  = 0x83C0;
-constexpr uint16_t kStatusDim   = 0x6B4D; // dim warm grey for status row
-constexpr uint16_t kStatusAccent= 0xFD60; // model accent
-constexpr uint16_t kPickerSel   = 0xFD60;
-constexpr uint16_t kPickerIdle  = 0xEF7D;
+constexpr uint16_t kStatusDim   = 0x6B4D;
+constexpr uint16_t kStatusAccent= 0xFD60;
+constexpr uint16_t kSelColor    = 0xFD60;
+constexpr uint16_t kIdleColor   = 0xEF7D;
+
+// History depth options
+constexpr int kDepthOptions[] = {5, 10, 20, 40, 60};
+constexpr int kDepthCount     = sizeof(kDepthOptions) / sizeof(int);
+
+// Menu items (charles-curated set)
+constexpr int kMenuItemCount = 7;
+const char* const kMenuLabels[kMenuItemCount] = {
+    "models",
+    "new chat",
+    "history depth",
+    "system prompt",
+    "wifi info",
+    "diagnostics",
+    "exit",
+};
 
 } // namespace
 
 ChatScreen::ChatScreen(ESPAI::OpenAICompatibleProvider* ai,
                        const String& systemPrompt,
                        const std::vector<ModelChoice>& models,
-                       int initialModelIdx)
+                       int initialModelIdx,
+                       int initialHistoryDepth)
     : _ai(ai),
       _systemPrompt(systemPrompt),
       _models(models),
       _modelIdx(initialModelIdx),
-      _conv(20) {
+      _historyDepth(initialHistoryDepth),
+      _conv(initialHistoryDepth),
+      _bodyCanvas(&M5Cardputer.Display) {
     _conv.setSystemPrompt(systemPrompt);
+    // Initialize _depthSel to whichever option matches the persisted depth.
+    for (int i = 0; i < kDepthCount; i++) {
+        if (kDepthOptions[i] == initialHistoryDepth) { _depthSel = i; break; }
+    }
 }
 
-int ChatScreen::lineHeight() const {
-    return M5Cardputer.Display.fontHeight() + kLinePad;
-}
-int ChatScreen::bodyTop() const   { return kStatusH; }
-int ChatScreen::bodyHeight() const { return kScreenH - kStatusH - kInputH; }
+int ChatScreen::lineHeight()   const { return _bodyCanvas.fontHeight() + kLinePad; }
+int ChatScreen::bodyTop()      const { return kStatusH; }
+int ChatScreen::bodyHeight()   const { return kScreenH - kStatusH - kInputH; }
 int ChatScreen::visibleLines() const { return bodyHeight() / lineHeight(); }
 
 void ChatScreen::begin() {
+    // Direct-draw target: status + input rows
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.fillScreen(kBg);
+
+    // Offscreen body buffer kills the fillRect-then-print flicker on streaming.
+    _bodyCanvas.setColorDepth(16);
+    _canvasOk = _bodyCanvas.createSprite(kScreenW, bodyHeight());
+    if (!_canvasOk) {
+        Serial.printf("[chat] WARN: canvas alloc failed for %dx%d\n",
+                      kScreenW, bodyHeight());
+    } else {
+        _bodyCanvas.setFont(&fonts::Font2);
+        _bodyCanvas.setTextSize(1);
+        _bodyCanvas.fillScreen(kBg);
+    }
+
     _statusDirty = _bodyDirty = _inputDirty = true;
 }
 
-// ----- main tick -----
+// ============================================================================
+// main tick
+// ============================================================================
 
 void ChatScreen::tick() {
     pollKeyboard();
@@ -72,49 +112,48 @@ void ChatScreen::tick() {
     delay(5);
 }
 
-// ----- keyboard polling -----
+// ============================================================================
+// keyboard
+// ============================================================================
 
 bool ChatScreen::repeatTick(Held& h, uint32_t initialMs, uint32_t periodMs) {
     uint32_t now = millis();
     if (!h.active) return false;
     if (now - h.firstPress < initialMs) return false;
-    if (now - h.lastRepeat < periodMs) return false;
+    if (now - h.lastRepeat < periodMs)  return false;
     h.lastRepeat = now;
     return true;
 }
 
 void ChatScreen::pollKeyboard() {
     M5Cardputer.update();
-
-    // While streaming, ignore everything.
     if (_streaming) return;
 
     auto& s = M5Cardputer.Keyboard.keysState();
 
-    // Newly-pressed printable chars (those in s.word that weren't there before)
+    // Rising-edge: chars that just became pressed
     for (char c : s.word) {
         bool wasPrev = false;
         for (char p : _prevWord) if (p == c) { wasPrev = true; break; }
         if (!wasPrev) onCharPressed(c, s.fn);
     }
 
-    // Del rising edge + hold repeat
+    // Del rising + hold-repeat (50ms cadence, 400ms initial)
     if (s.del && !_prevDel) {
         onDel();
-        _heldDel.firstPress = millis(); _heldDel.lastRepeat = millis(); _heldDel.active = true;
+        _heldDel.firstPress = millis();
+        _heldDel.lastRepeat = millis();
+        _heldDel.active     = true;
     } else if (!s.del) {
         _heldDel.active = false;
     } else if (repeatTick(_heldDel)) {
         onDel();
     }
 
-    // Enter rising edge only
-    if (s.enter && !_prevEnter) {
-        onEnter();
-    }
+    // Enter rising only
+    if (s.enter && !_prevEnter) onEnter();
 
-    // Scroll hold-repeat for Fn+',' and Fn+'.' (and the alt convention Fn+';' / Fn+'/')
-    // The chars are already routed via onCharPressed; here we just track hold for repeat.
+    // Fn+scroll hold-repeat
     auto fnHas = [&](char target) {
         if (!s.fn) return false;
         for (char c : s.word) if (c == target) return true;
@@ -127,90 +166,80 @@ void ChatScreen::pollKeyboard() {
     } else if (!upHeld) {
         _heldScrollUp.active = false;
     } else if (repeatTick(_heldScrollUp, 350, 60)) {
-        if (_mode == Mode::Chat) {
-            _scrollOffset = std::min(_scrollOffset + 1, 200);
-            _autoScroll = (_scrollOffset == 0);
-            _bodyDirty = true;
-        } else if (_mode == Mode::Picker) {
-            if (_pickerSel > 0) { _pickerSel--; _bodyDirty = true; }
-        }
+        if      (_mode == Mode::Chat)        scrollUp();
+        else if (_mode == Mode::Menu)        { if (_menuSel > 0)            { _menuSel--;   _bodyDirty = true; } }
+        else if (_mode == Mode::Picker)      { if (_pickerSel > 0)          { _pickerSel--; _bodyDirty = true; } }
+        else if (_mode == Mode::DepthPicker) { if (_depthSel > 0)           { _depthSel--;  _bodyDirty = true; } }
+        else if (_mode == Mode::Info)        { if (_infoScroll > 0)         { _infoScroll--;_bodyDirty = true; } }
     }
     if (downHeld && !_heldScrollDown.active) {
         _heldScrollDown.firstPress = millis(); _heldScrollDown.lastRepeat = millis(); _heldScrollDown.active = true;
     } else if (!downHeld) {
         _heldScrollDown.active = false;
     } else if (repeatTick(_heldScrollDown, 350, 60)) {
-        if (_mode == Mode::Chat) {
-            if (_scrollOffset > 0) { _scrollOffset--; _bodyDirty = true; }
-            if (_scrollOffset == 0) _autoScroll = true;
-        } else if (_mode == Mode::Picker) {
-            if (_pickerSel + 1 < (int)_models.size()) { _pickerSel++; _bodyDirty = true; }
-        }
+        if      (_mode == Mode::Chat)        scrollDown();
+        else if (_mode == Mode::Menu)        { if (_menuSel + 1 < kMenuItemCount)        { _menuSel++;    _bodyDirty = true; } }
+        else if (_mode == Mode::Picker)      { if (_pickerSel + 1 < (int)_models.size()) { _pickerSel++;  _bodyDirty = true; } }
+        else if (_mode == Mode::DepthPicker) { if (_depthSel + 1 < kDepthCount)          { _depthSel++;   _bodyDirty = true; } }
+        else if (_mode == Mode::Info)        { _infoScroll++; _bodyDirty = true; }
     }
 
-    // Save state for next tick
     _prevWord  = s.word;
     _prevDel   = s.del;
     _prevEnter = s.enter;
 }
 
-// ----- key handlers (rising-edge) -----
+// ============================================================================
+// rising-edge handlers
+// ============================================================================
 
 void ChatScreen::onCharPressed(char c, bool fn) {
-    if (fn) {
-        if (_mode == Mode::Chat) {
-            if (c == 'n' || c == 'N') { newChat(); return; }
-            if (c == 'm' || c == 'M') { openPicker(); return; }
-            // Scroll keys: one-shot here; repeat handled in pollKeyboard
-            if (c == ',' || c == ';') {
-                _scrollOffset = std::min(_scrollOffset + 1, 200);
-                _autoScroll = (_scrollOffset == 0);
-                _bodyDirty = true;
-                return;
-            }
-            if (c == '.' || c == '/') {
-                if (_scrollOffset > 0) _scrollOffset--;
-                if (_scrollOffset == 0) _autoScroll = true;
-                _bodyDirty = true;
-                return;
-            }
-        } else if (_mode == Mode::Picker) {
-            if (c == ',' || c == ';') {
-                if (_pickerSel > 0) { _pickerSel--; _bodyDirty = true; }
-                return;
-            }
-            if (c == '.' || c == '/') {
-                if (_pickerSel + 1 < (int)_models.size()) { _pickerSel++; _bodyDirty = true; }
-                return;
-            }
-        }
-        // Fn+anything else: swallow to avoid typing the underlying char
-        return;
-    }
-
     if (_mode == Mode::Chat) {
+        if (fn) {
+            if (c == 'n' || c == 'N') {
+                confirmDestructive("new chat?",
+                                   "all turns will be cleared.",
+                                   [this]{ newChat(); }, Mode::Chat);
+                return;
+            }
+            if (c == 'm' || c == 'M') { openPicker(Mode::Chat); return; }
+            if (c == 's' || c == 'S') { openMenu(); return; }
+            if (c == ',' || c == ';') { scrollUp();   return; }
+            if (c == '.' || c == '/') { scrollDown(); return; }
+            return; // swallow other Fn+x so the bare char doesn't show up in input
+        }
         _input += c;
         _inputDirty = true;
         return;
     }
+
+    if (_mode == Mode::Menu) {
+        if (c == ',') { if (_menuSel > 0)                       { _menuSel--; _bodyDirty = true; } return; }
+        if (c == '.') { if (_menuSel + 1 < kMenuItemCount)      { _menuSel++; _bodyDirty = true; } return; }
+        return;
+    }
+
     if (_mode == Mode::Picker) {
-        // Allow plain ,/. as alternates if user isn't holding Fn
-        if (c == ',') { if (_pickerSel > 0) { _pickerSel--; _bodyDirty = true; } return; }
+        if (c == ',') { if (_pickerSel > 0)                       { _pickerSel--; _bodyDirty = true; } return; }
         if (c == '.') { if (_pickerSel + 1 < (int)_models.size()) { _pickerSel++; _bodyDirty = true; } return; }
         return;
     }
+
+    if (_mode == Mode::DepthPicker) {
+        if (c == ',') { if (_depthSel > 0)                 { _depthSel--; _bodyDirty = true; } return; }
+        if (c == '.') { if (_depthSel + 1 < kDepthCount)   { _depthSel++; _bodyDirty = true; } return; }
+        return;
+    }
+
     if (_mode == Mode::Confirm) {
-        if (c == 'y' || c == 'Y') {
-            applyModel(_pendingModelIdx);
-            _mode = Mode::Chat;
-            _statusDirty = _bodyDirty = _inputDirty = true;
-            return;
-        }
-        if (c == 'n' || c == 'N') {
-            _mode = Mode::Picker;
-            _bodyDirty = _inputDirty = true;
-            return;
-        }
+        if (c == 'y' || c == 'Y') { resolveConfirm(true);  return; }
+        if (c == 'n' || c == 'N') { resolveConfirm(false); return; }
+        return;
+    }
+
+    if (_mode == Mode::Info) {
+        // any printable does nothing; backspace exits
+        return;
     }
 }
 
@@ -222,15 +251,11 @@ void ChatScreen::onDel() {
         }
         return;
     }
-    if (_mode == Mode::Picker) {
-        closePicker(false);
-        return;
-    }
-    if (_mode == Mode::Confirm) {
-        _mode = Mode::Picker;
-        _bodyDirty = _inputDirty = true;
-        return;
-    }
+    if (_mode == Mode::Menu)         { closeMenu();              return; }
+    if (_mode == Mode::Picker
+     || _mode == Mode::DepthPicker
+     || _mode == Mode::Info)         { _mode = _modalReturnTo; _statusDirty = _bodyDirty = _inputDirty = true; return; }
+    if (_mode == Mode::Confirm)      { resolveConfirm(false);    return; }
 }
 
 void ChatScreen::onEnter() {
@@ -238,42 +263,124 @@ void ChatScreen::onEnter() {
         if (_input.length() > 0) sendCurrent();
         return;
     }
-    if (_mode == Mode::Picker) {
-        if (_pickerSel != _modelIdx) {
-            _pendingModelIdx = _pickerSel;
-            _mode = Mode::Confirm;
-            _bodyDirty = _inputDirty = true;
-        } else {
-            closePicker(false);
+    if (_mode == Mode::Menu) {
+        switch (_menuSel) {
+            case 0: openPicker(Mode::Menu); break;
+            case 1: confirmDestructive("clear chat?",
+                                       "all turns will be discarded.",
+                                       [this]{ newChat(); _mode = Mode::Chat;
+                                               _statusDirty = _bodyDirty = _inputDirty = true; },
+                                       Mode::Menu); break;
+            case 2: openDepth(); break;
+            case 3: buildSystemPromptLines();
+                    openInfoScreen("system prompt"); break;
+            case 4: buildWiFiLines();
+                    openInfoScreen("wifi info"); break;
+            case 5: buildDiagnosticsLines();
+                    openInfoScreen("diagnostics"); break;
+            case 6: closeMenu(); break;
         }
         return;
     }
-    if (_mode == Mode::Confirm) {
-        applyModel(_pendingModelIdx);
-        _mode = Mode::Chat;
+    if (_mode == Mode::Picker) {
+        if (_pickerSel != _modelIdx) {
+            _pendingModelIdx = _pickerSel;
+            String q = String("switch to ") + _models[_pickerSel].label + "?";
+            confirmDestructive(q, "this clears the chat.",
+                               [this]{
+                                   applyModel(_pendingModelIdx);
+                                   _mode = Mode::Chat;
+                                   _statusDirty = _bodyDirty = _inputDirty = true;
+                               },
+                               Mode::Picker);
+        } else {
+            _mode = _modalReturnTo;
+            _statusDirty = _bodyDirty = _inputDirty = true;
+        }
+        return;
+    }
+    if (_mode == Mode::DepthPicker) {
+        applyDepth(kDepthOptions[_depthSel]);
+        _mode = _modalReturnTo;
         _statusDirty = _bodyDirty = _inputDirty = true;
         return;
     }
+    if (_mode == Mode::Confirm) { resolveConfirm(true); return; }
+    if (_mode == Mode::Info)    { _mode = _modalReturnTo; _statusDirty = _bodyDirty = _inputDirty = true; return; }
 }
 
-// ----- actions -----
+// ============================================================================
+// mode transitions
+// ============================================================================
+
+void ChatScreen::openMenu() {
+    _menuSel = 0;
+    _mode    = Mode::Menu;
+    _statusDirty = _bodyDirty = _inputDirty = true;
+}
+void ChatScreen::closeMenu() {
+    _mode = Mode::Chat;
+    _statusDirty = _bodyDirty = _inputDirty = true;
+}
+void ChatScreen::openPicker(Mode returnTo) {
+    _modalReturnTo = returnTo;
+    _pickerSel     = _modelIdx;
+    _mode          = Mode::Picker;
+    _statusDirty = _bodyDirty = _inputDirty = true;
+}
+void ChatScreen::openDepth() {
+    _modalReturnTo = Mode::Menu;
+    // _depthSel was initialized in constructor / updated by applyDepth
+    _mode          = Mode::DepthPicker;
+    _statusDirty = _bodyDirty = _inputDirty = true;
+}
+void ChatScreen::openInfoScreen(const String& title) {
+    _modalReturnTo = Mode::Menu;
+    _infoTitle     = title;
+    _infoScroll    = 0;
+    _mode          = Mode::Info;
+    _statusDirty = _bodyDirty = _inputDirty = true;
+}
+void ChatScreen::confirmDestructive(const String& q, const String& detail,
+                                    std::function<void()> onYes, Mode returnTo) {
+    _confirmQ      = q;
+    _confirmD      = detail;
+    _confirmOnYes  = onYes;
+    _confirmReturn = returnTo;
+    _mode          = Mode::Confirm;
+    _statusDirty = _bodyDirty = _inputDirty = true;
+}
+void ChatScreen::resolveConfirm(bool yes) {
+    auto cb = _confirmOnYes;
+    Mode r  = _confirmReturn;
+    _confirmOnYes = nullptr;
+    if (yes && cb) cb();
+    else {
+        _mode = r;
+        _statusDirty = _bodyDirty = _inputDirty = true;
+    }
+}
+
+// ============================================================================
+// actions
+// ============================================================================
 
 void ChatScreen::sendCurrent() {
     String prompt = _input;
     _input = "";
 
     _conv.addUserMessage(prompt);
-    _conv.addAssistantMessage(""); // placeholder we'll grow
+    _conv.addAssistantMessage("");
 
-    // Reset session filename on the very first message of this chat
     if (_sessionFile.length() == 0) {
         _sessionFile = chatstore::newSessionFilename();
         Serial.printf("[chat] new session file: %s\n", _sessionFile.c_str());
     }
 
-    _streaming   = true;
-    _scrollOffset = 0; _autoScroll = true;
-    _bodyDirty = _inputDirty = true;
+    _streaming    = true;
+    _scrollOffset = 0;
+    _autoScroll   = true;
+    _bodyDirty    = _inputDirty = true;
     renderBody();
     renderInput();
 
@@ -281,14 +388,10 @@ void ChatScreen::sendCurrent() {
     Serial.printf("[heap] pre-send free=%u min=%u\n",
                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
 
-    // Build the messages list: system prompt first, then all history.
     std::vector<ESPAI::Message> messages;
     if (_systemPrompt.length() > 0) {
         messages.push_back(ESPAI::Message(ESPAI::Role::System, _systemPrompt));
     }
-    // Conversation::getMessages() returns the full history including the
-    // empty assistant placeholder we just added. Drop the last one when
-    // sending so the API has a fresh slate to complete.
     const auto& msgs = _conv.getMessages();
     for (size_t i = 0; i + 1 < msgs.size(); i++) messages.push_back(msgs[i]);
 
@@ -301,11 +404,9 @@ void ChatScreen::sendCurrent() {
     bool ok = _ai->chatStream(messages, options,
         [&](const String& chunk, bool done) {
             chunks++;
-            // Grow the in-flight assistant turn. Mutate via clear+add since
-            // Conversation doesn't expose mutation otherwise.
             auto& m = const_cast<std::vector<ESPAI::Message>&>(_conv.getMessages());
             if (!m.empty()) m.back().content += chunk;
-            if (_autoScroll) renderChat();
+            if (_autoScroll) renderBody();
             if (done) {
                 Serial.printf("[chat] done. %ums, %d chunks\n",
                               (unsigned)(millis() - t0), chunks);
@@ -319,7 +420,6 @@ void ChatScreen::sendCurrent() {
     }
     _streaming = false;
 
-    // Persist the conversation after each completed exchange.
     if (!chatstore::saveSession(_sessionFile, _conv,
                                 _models[_modelIdx].slug)) {
         Serial.println("[chat] save failed");
@@ -332,65 +432,92 @@ void ChatScreen::newChat() {
     Serial.println("[chat] new session");
     _conv.clear();
     _conv.setSystemPrompt(_systemPrompt);
-    _sessionFile = "";
-    _input = "";
-    _scrollOffset = 0; _autoScroll = true;
-    _bodyDirty = _inputDirty = true;
-}
-
-void ChatScreen::openPicker() {
-    _pickerSel = _modelIdx;
-    _mode = Mode::Picker;
-    _bodyDirty = _inputDirty = true;
-}
-
-void ChatScreen::closePicker(bool /*committed*/) {
-    _mode = Mode::Chat;
-    _bodyDirty = _inputDirty = true;
+    _sessionFile  = "";
+    _input        = "";
+    _scrollOffset = 0;
+    _autoScroll   = true;
+    _bodyDirty    = _inputDirty = true;
 }
 
 void ChatScreen::applyModel(int idx) {
     if (idx < 0 || idx >= (int)_models.size()) return;
-    Serial.printf("[chat] switching to %s\n", _models[idx].slug);
+    Serial.printf("[chat] switching model: %s\n", _models[idx].slug);
     _modelIdx = idx;
     _ai->setModel(_models[idx].slug);
-    // Switching model starts a new chat per spec.
     newChat();
 }
 
-// ----- rendering -----
+void ChatScreen::applyDepth(int depth) {
+    Serial.printf("[chat] history depth -> %d\n", depth);
+    _historyDepth = depth;
+    _conv.setMaxMessages((size_t)depth);
+    settings::setHistoryDepth(depth);
+}
+
+void ChatScreen::scrollUp() {
+    _scrollOffset++;
+    if (_scrollOffset > 500) _scrollOffset = 500;
+    _autoScroll = (_scrollOffset == 0);
+    _bodyDirty  = true;
+}
+void ChatScreen::scrollDown() {
+    if (_scrollOffset > 0) _scrollOffset--;
+    if (_scrollOffset == 0) _autoScroll = true;
+    _bodyDirty = true;
+}
+
+// ============================================================================
+// rendering
+// ============================================================================
 
 void ChatScreen::renderStatus() {
     M5Cardputer.Display.fillRect(0, 0, kScreenW, kStatusH, kBg);
 
-    // Right-aligned model label, no background.
     M5Cardputer.Display.setFont(&fonts::Font0);
     M5Cardputer.Display.setTextSize(1);
+
     M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
     const char* label = _models[_modelIdx].label;
     int lw = M5Cardputer.Display.textWidth(label);
     M5Cardputer.Display.setCursor(kScreenW - kPadX - lw, 2);
     M5Cardputer.Display.print(label);
 
-    // Left-aligned mode hint (only when not in chat)
     if (_mode != Mode::Chat) {
-        const char* hint = (_mode == Mode::Picker) ? "[picker]" : "[confirm]";
+        const char* hint = "";
+        switch (_mode) {
+            case Mode::Menu:        hint = "[menu]";    break;
+            case Mode::Picker:      hint = "[models]";  break;
+            case Mode::DepthPicker: hint = "[depth]";   break;
+            case Mode::Confirm:     hint = "[confirm]"; break;
+            case Mode::Info:        hint = _infoTitle.length() ? _infoTitle.c_str() : "[info]"; break;
+            default: break;
+        }
         M5Cardputer.Display.setTextColor(kStatusDim, kBg);
         M5Cardputer.Display.setCursor(kPadX, 2);
         M5Cardputer.Display.print(hint);
     }
 
-    // Restore body font
+    // Restore display font for input
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
 }
 
 void ChatScreen::renderBody() {
-    switch (_mode) {
-        case Mode::Chat:    renderChat();    break;
-        case Mode::Picker:  renderPicker();  break;
-        case Mode::Confirm: renderConfirm(); break;
+    if (!_canvasOk) {
+        // No sprite buffer — fall back to direct draw, accept flicker
+        M5Cardputer.Display.fillRect(0, bodyTop(), kScreenW, bodyHeight(), kBg);
+        return;
     }
+    _bodyCanvas.fillScreen(kBg);
+    switch (_mode) {
+        case Mode::Chat:        renderChatBody();    break;
+        case Mode::Menu:        renderMenuBody();    break;
+        case Mode::Picker:      renderPickerBody();  break;
+        case Mode::DepthPicker: renderDepthBody();   break;
+        case Mode::Confirm:     renderConfirmBody(); break;
+        case Mode::Info:        renderInfoBody();    break;
+    }
+    _bodyCanvas.pushSprite(0, bodyTop());
 }
 
 void ChatScreen::buildLines(std::vector<Line>& out) {
@@ -401,14 +528,12 @@ void ChatScreen::buildLines(std::vector<Line>& out) {
         if (m.role == ESPAI::Role::System) continue;
         uint16_t color = (m.role == ESPAI::Role::User) ? kUserColor : kAsstColor;
         bool right     = (m.role == ESPAI::Role::User);
-        wrapInto(m.content, maxPx, color, right, out);
+        wrapIntoCanvas(m.content, maxPx, color, right, out);
         if (i + 1 < msgs.size()) out.push_back({String(""), 0, false});
     }
 }
 
-void ChatScreen::renderChat() {
-    M5Cardputer.Display.fillRect(0, bodyTop(), kScreenW, bodyHeight(), kBg);
-
+void ChatScreen::renderChatBody() {
     std::vector<Line> lines;
     lines.reserve(_conv.size() * 3);
     buildLines(lines);
@@ -416,74 +541,137 @@ void ChatScreen::renderChat() {
     const int lh   = lineHeight();
     const int vis  = visibleLines();
     const int tot  = (int)lines.size();
-    // We want the LAST (tot - _scrollOffset) line to be the bottom one.
-    int endIdx   = tot - _scrollOffset;
+    int endIdx     = tot - _scrollOffset;
     if (endIdx < 1) endIdx = std::min(1, tot);
-    int startIdx = endIdx - vis;
+    int startIdx   = endIdx - vis;
     if (startIdx < 0) startIdx = 0;
 
-    int y = bodyTop() + 2;
+    int y = 2;
     for (int i = startIdx; i < endIdx && i < tot; i++) {
         const auto& ln = lines[i];
         if (ln.text.length() == 0) { y += lh; continue; }
-        M5Cardputer.Display.setTextColor(ln.color, kBg);
+        _bodyCanvas.setTextColor(ln.color, kBg);
         int x = kPadX;
         if (ln.rightAlign) {
-            int w = M5Cardputer.Display.textWidth(ln.text.c_str());
+            int w = _bodyCanvas.textWidth(ln.text.c_str());
             x = kScreenW - kPadX - w;
             if (x < kPadX) x = kPadX;
         }
-        M5Cardputer.Display.setCursor(x, y);
-        M5Cardputer.Display.print(ln.text);
+        _bodyCanvas.setCursor(x, y);
+        _bodyCanvas.print(ln.text);
         y += lh;
     }
 }
 
-void ChatScreen::renderPicker() {
-    M5Cardputer.Display.fillRect(0, bodyTop(), kScreenW, bodyHeight(), kBg);
-    int y = bodyTop() + 6;
+void ChatScreen::renderMenuBody() {
     int lh = lineHeight() + 2;
+    // Visible window of items; scroll so the selection stays in view.
+    int vis = (bodyHeight() - 6) / lh;
+    if (vis < 1) vis = 1;
+    int start = 0;
+    if (_menuSel >= vis) start = _menuSel - vis + 1;
+    int end = start + vis;
+    if (end > kMenuItemCount) end = kMenuItemCount;
 
-    M5Cardputer.Display.setTextColor(kStatusDim, kBg);
-    M5Cardputer.Display.setCursor(kPadX, y);
-    M5Cardputer.Display.print("select model:");
-    y += lh + 2;
+    int y = 6;
+    for (int i = start; i < end; i++) {
+        bool sel = (i == _menuSel);
+        uint16_t color = sel ? kSelColor : kIdleColor;
+        _bodyCanvas.setTextColor(color, kBg);
+        _bodyCanvas.setCursor(kPadX, y);
+        _bodyCanvas.print(sel ? "> " : "  ");
+        _bodyCanvas.print(kMenuLabels[i]);
+        y += lh;
+    }
+    // Tiny scroll hint at right edge if there's more
+    if (kMenuItemCount > vis) {
+        _bodyCanvas.setTextColor(kStatusDim, kBg);
+        if (start > 0) {
+            _bodyCanvas.setCursor(kScreenW - 10, 6);
+            _bodyCanvas.print("^");
+        }
+        if (end < kMenuItemCount) {
+            _bodyCanvas.setCursor(kScreenW - 10, bodyHeight() - 14);
+            _bodyCanvas.print("v");
+        }
+    }
+}
 
+void ChatScreen::renderPickerBody() {
+    int y  = 6;
+    int lh = lineHeight() + 2;
     for (size_t i = 0; i < _models.size(); i++) {
         bool sel = ((int)i == _pickerSel);
         bool cur = ((int)i == _modelIdx);
-        uint16_t color = sel ? kPickerSel : kPickerIdle;
-        const char* mark = sel ? "> " : "  ";
-        M5Cardputer.Display.setTextColor(color, kBg);
-        M5Cardputer.Display.setCursor(kPadX, y);
-        M5Cardputer.Display.print(mark);
-        M5Cardputer.Display.print(_models[i].label);
+        uint16_t color = sel ? kSelColor : kIdleColor;
+        _bodyCanvas.setTextColor(color, kBg);
+        _bodyCanvas.setCursor(kPadX, y);
+        _bodyCanvas.print(sel ? "> " : "  ");
+        _bodyCanvas.print(_models[i].label);
         if (cur) {
-            M5Cardputer.Display.setTextColor(kStatusDim, kBg);
-            M5Cardputer.Display.print("  (current)");
+            _bodyCanvas.setTextColor(kStatusDim, kBg);
+            _bodyCanvas.print("  (current)");
         }
         y += lh;
     }
 }
 
-void ChatScreen::renderConfirm() {
-    M5Cardputer.Display.fillRect(0, bodyTop(), kScreenW, bodyHeight(), kBg);
-    int y = bodyTop() + 8;
+void ChatScreen::renderDepthBody() {
+    int y  = 6;
     int lh = lineHeight() + 2;
+    _bodyCanvas.setTextColor(kStatusDim, kBg);
+    _bodyCanvas.setCursor(kPadX, y);
+    _bodyCanvas.print("messages kept:");
+    y += lh;
+    for (int i = 0; i < kDepthCount; i++) {
+        bool sel = (i == _depthSel);
+        bool cur = (kDepthOptions[i] == _historyDepth);
+        uint16_t color = sel ? kSelColor : kIdleColor;
+        _bodyCanvas.setTextColor(color, kBg);
+        _bodyCanvas.setCursor(kPadX + 6, y);
+        _bodyCanvas.print(sel ? "> " : "  ");
+        _bodyCanvas.print(String(kDepthOptions[i]));
+        if (cur) {
+            _bodyCanvas.setTextColor(kStatusDim, kBg);
+            _bodyCanvas.print("  (current)");
+        }
+        y += lh;
+    }
+}
 
-    M5Cardputer.Display.setTextColor(kUserColor, kBg);
-    M5Cardputer.Display.setCursor(kPadX, y); y += lh;
-    M5Cardputer.Display.print("switch to:");
-    M5Cardputer.Display.setTextColor(kAsstColor, kBg);
-    M5Cardputer.Display.setCursor(kPadX + 8, y); y += lh;
-    M5Cardputer.Display.print(_models[_pendingModelIdx].label);
+void ChatScreen::renderConfirmBody() {
+    int y  = 8;
+    int lh = lineHeight() + 2;
+    _bodyCanvas.setTextColor(kUserColor, kBg);
+    _bodyCanvas.setCursor(kPadX, y);
+    _bodyCanvas.print(_confirmQ);
+    y += lh + 2;
+    _bodyCanvas.setTextColor(kStatusDim, kBg);
+    _bodyCanvas.setCursor(kPadX, y);
+    _bodyCanvas.print(_confirmD);
+    y += lh + 4;
+    _bodyCanvas.setTextColor(kAsstColor, kBg);
+    _bodyCanvas.setCursor(kPadX, y);
+    _bodyCanvas.print("[enter/y] ok  [del/n] no");
+}
 
-    y += 4;
-    M5Cardputer.Display.setTextColor(kStatusDim, kBg);
-    M5Cardputer.Display.setCursor(kPadX, y); y += lh;
-    M5Cardputer.Display.print("this clears the chat.");
-    M5Cardputer.Display.setCursor(kPadX, y);
-    M5Cardputer.Display.print("[enter/y] ok  [del/n] cancel");
+void ChatScreen::renderInfoBody() {
+    int lh = lineHeight() + 1;
+    int y  = 4;
+    const int vis = bodyHeight() / lh;
+    int start = _infoScroll;
+    if (start < 0) start = 0;
+    if (start > (int)_infoLines.size()) start = _infoLines.size();
+    int end = start + vis;
+    if (end > (int)_infoLines.size()) end = _infoLines.size();
+    for (int i = start; i < end; i++) {
+        const String& s = _infoLines[i];
+        bool isLabel = s.startsWith("---");
+        _bodyCanvas.setTextColor(isLabel ? kStatusDim : kIdleColor, kBg);
+        _bodyCanvas.setCursor(kPadX, y);
+        _bodyCanvas.print(s);
+        y += lh;
+    }
 }
 
 void ChatScreen::renderInput() {
@@ -491,40 +679,56 @@ void ChatScreen::renderInput() {
     M5Cardputer.Display.fillRect(0, y, kScreenW, kInputH, kBg);
     M5Cardputer.Display.drawLine(0, y, kScreenW, y, kDivider);
 
-    if (_mode != Mode::Chat) {
-        // Footer hint per mode
+    M5Cardputer.Display.setFont(&fonts::Font0);
+    M5Cardputer.Display.setTextSize(1);
+
+    auto footerHint = [&](const char* h) {
         M5Cardputer.Display.setTextColor(kStatusDim, kBg);
-        M5Cardputer.Display.setCursor(kPadX, y + 3);
-        if (_mode == Mode::Picker) {
-            M5Cardputer.Display.print("fn+,/.  enter  del=cancel");
-        } else {
-            M5Cardputer.Display.print("y=switch  n/del=cancel");
+        M5Cardputer.Display.setCursor(kPadX, y + 6);
+        M5Cardputer.Display.print(h);
+    };
+
+    switch (_mode) {
+        case Mode::Menu:        footerHint("fn+,/.  enter=open  del=back"); goto restore;
+        case Mode::Picker:      footerHint("fn+,/.  enter=switch  del=back"); goto restore;
+        case Mode::DepthPicker: footerHint("fn+,/.  enter=apply  del=back"); goto restore;
+        case Mode::Confirm:     footerHint("y/enter=yes  n/del=no");        goto restore;
+        case Mode::Info:        footerHint("fn+,/. scroll  del=back");      goto restore;
+        case Mode::Chat: break;
+    }
+
+    // CHAT mode input
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    {
+        String shown = _input;
+        int maxPx = kScreenW - 2 * kPadX - 8;
+        while (M5Cardputer.Display.textWidth(shown.c_str()) > maxPx
+               && shown.length() > 0) {
+            shown.remove(0, 1);
         }
-        return;
-    }
 
-    String shown = _input;
-    int maxPx = kScreenW - 2 * kPadX - 8;
-    while (M5Cardputer.Display.textWidth(shown.c_str()) > maxPx
-           && shown.length() > 0) {
-        shown.remove(0, 1);
-    }
+        M5Cardputer.Display.setTextColor(kInputColor, kBg);
+        M5Cardputer.Display.setCursor(kPadX, y + 3);
+        M5Cardputer.Display.print(shown);
 
-    M5Cardputer.Display.setTextColor(kInputColor, kBg);
-    M5Cardputer.Display.setCursor(kPadX, y + 3);
-    M5Cardputer.Display.print(shown);
-
-    if (_streaming) {
-        const char* hint = "...";
-        int hw = M5Cardputer.Display.textWidth(hint);
-        M5Cardputer.Display.setTextColor(kStreamHint, kBg);
-        M5Cardputer.Display.setCursor(kScreenW - kPadX - hw, y + 3);
-        M5Cardputer.Display.print(hint);
-    } else if (_cursorOn) {
-        int cx = M5Cardputer.Display.getCursorX();
-        int ch = M5Cardputer.Display.fontHeight();
-        M5Cardputer.Display.fillRect(cx + 1, y + 3, 6, ch, kCursorColor);
+        if (_streaming) {
+            const char* hint = "...";
+            int hw = M5Cardputer.Display.textWidth(hint);
+            M5Cardputer.Display.setTextColor(kStreamHint, kBg);
+            M5Cardputer.Display.setCursor(kScreenW - kPadX - hw, y + 3);
+            M5Cardputer.Display.print(hint);
+        } else if (_cursorOn) {
+            int cx = M5Cardputer.Display.getCursorX();
+            int ch = M5Cardputer.Display.fontHeight();
+            M5Cardputer.Display.fillRect(cx + 1, y + 3, 6, ch, kCursorColor);
+        }
     }
+    return;
+
+restore:
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
 }
 
 void ChatScreen::renderCursorOnly() {
@@ -544,8 +748,8 @@ void ChatScreen::renderCursorOnly() {
     }
 }
 
-void ChatScreen::wrapInto(const String& s, int maxPx, uint16_t color,
-                          bool right, std::vector<Line>& out) {
+void ChatScreen::wrapIntoCanvas(const String& s, int maxPx, uint16_t color,
+                                bool right, std::vector<Line>& out) {
     const int n = (int)s.length();
     if (n == 0) { out.push_back({String(""), color, right}); return; }
     int i = 0;
@@ -556,7 +760,7 @@ void ChatScreen::wrapInto(const String& s, int maxPx, uint16_t color,
             char c = s.charAt(j);
             if (c == '\n') { lastBreak = j; j++; break; }
             String probe = s.substring(i, j + 1);
-            if (M5Cardputer.Display.textWidth(probe.c_str()) > maxPx) break;
+            if (_bodyCanvas.textWidth(probe.c_str()) > maxPx) break;
             if (c == ' ') lastBreak = j;
             j++;
         }
@@ -573,6 +777,77 @@ void ChatScreen::wrapInto(const String& s, int maxPx, uint16_t color,
         i = end;
         while (i < n && (s.charAt(i) == ' ' || s.charAt(i) == '\n')) i++;
     }
+}
+
+static String kvFmt(const char* k, const String& v) {
+    String s = String(k);
+    while (s.length() < 9) s += ' ';
+    s += v;
+    return s;
+}
+
+void ChatScreen::buildSystemPromptLines() {
+    _infoLines.clear();
+    _infoLines.push_back(kvFmt("length", String((unsigned)_systemPrompt.length()) + " chars"));
+    _infoLines.push_back("--- text ---");
+    // Word-wrap the prompt to ~38 cols for the small display.
+    String sp = _systemPrompt;
+    while (sp.length() > 0) {
+        int take = sp.length() > 28 ? 28 : sp.length();
+        // try to break on a space
+        if (take < (int)sp.length()) {
+            int sp_break = sp.lastIndexOf(' ', take);
+            if (sp_break > 4) take = sp_break;
+        }
+        _infoLines.push_back(sp.substring(0, take));
+        sp = sp.substring(take);
+        sp.trim();
+    }
+    _infoLines.push_back("");
+    _infoLines.push_back("override on sd:");
+    _infoLines.push_back("/CardputerLLM/system.txt");
+}
+
+void ChatScreen::buildWiFiLines() {
+    _infoLines.clear();
+    _infoLines.push_back(kvFmt("ssid", WiFi.SSID()));
+    _infoLines.push_back(kvFmt("ip", WiFi.localIP().toString()));
+    _infoLines.push_back(kvFmt("rssi", String(WiFi.RSSI()) + " dBm"));
+    _infoLines.push_back(kvFmt("gw", WiFi.gatewayIP().toString()));
+    _infoLines.push_back(kvFmt("dns", WiFi.dnsIP().toString()));
+    _infoLines.push_back(kvFmt("mac", WiFi.macAddress()));
+    time_t now = time(nullptr);
+    if (now > 1577836800) {
+        struct tm t; gmtime_r(&now, &t);
+        char b[24];
+        snprintf(b, sizeof(b), "%04d-%02d-%02d %02d:%02dZ",
+                 t.tm_year+1900, t.tm_mon+1, t.tm_mday,
+                 t.tm_hour, t.tm_min);
+        _infoLines.push_back(kvFmt("utc", b));
+    } else {
+        _infoLines.push_back(kvFmt("utc", "unsynced"));
+    }
+}
+
+void ChatScreen::buildDiagnosticsLines() {
+    _infoLines.clear();
+    _infoLines.push_back("--- build ---");
+    _infoLines.push_back(kvFmt("version", "ph8-dev"));
+    _infoLines.push_back("--- chat ---");
+    _infoLines.push_back(kvFmt("model", _models[_modelIdx].label));
+    _infoLines.push_back(kvFmt("depth", String(_historyDepth)));
+    _infoLines.push_back(kvFmt("msgs", String((unsigned)_conv.size())));
+    _infoLines.push_back(kvFmt("session", _sessionFile.length() ? _sessionFile : String("(none)")));
+    _infoLines.push_back("--- heap ---");
+    _infoLines.push_back(kvFmt("free", String((unsigned)ESP.getFreeHeap())));
+    _infoLines.push_back(kvFmt("min", String((unsigned)ESP.getMinFreeHeap())));
+    _infoLines.push_back(kvFmt("largest", String((unsigned)ESP.getMaxAllocHeap())));
+    _infoLines.push_back("--- uptime ---");
+    uint32_t s = millis() / 1000;
+    char b[32];
+    snprintf(b, sizeof(b), "%uh %um %us",
+             (unsigned)(s/3600), (unsigned)((s/60)%60), (unsigned)(s%60));
+    _infoLines.push_back(kvFmt("up", b));
 }
 
 void ChatScreen::renderAll() {

@@ -213,6 +213,85 @@ hint.
 - Model picker label format is hand-curated. Phase 8 might pull
   display names from the /models response so they auto-update.
 
+## Phase 8 cycle 1: canvas + menu
+
+### Flicker fix (M5Canvas double buffer)
+
+Root cause: every redraw was `fillRect(black)` then `setCursor` then `print`.
+Between fill and text appearing the panel showed black for a frame.
+That's the streaming flicker.
+
+Fix: `M5Canvas _bodyCanvas(&M5Cardputer.Display)` sized 240 x (135 - 12
+status - 20 input) = 240 x 103 = 49 kB at 16 bpp. Body rendering writes
+into the canvas, then `pushSprite(0, statusH)` blits the whole region in
+one SPI burst. Display never shows a half-rendered state.
+
+Fallback: if `createSprite` returns false (heap exhausted), we revert to
+direct draw and log a warning. With current usage (49 kB sprite plus
+~50 kB other, on 320 kB SRAM) allocation has been fine.
+
+### What this does NOT solve
+
+Pixel-smooth scroll like factory. Each pushSprite still replaces the whole
+body region atomically, so scrolling moves the content in 18 px (one line
+height) jumps. To get pixel-smooth scroll we'd need either:
+  - ST7789 hardware vertical scroll registers (custom rendering model;
+    fixed line pitch; doesn't play well with bubble layout), or
+  - A taller canvas (e.g. 240x400) with windowed `pushSprite(srcX, srcY,
+    w, h)` where srcY animates. Tall canvas = ~190 kB which is too much
+    on the FN8 variant without PSRAM.
+
+Note for Phase 8 cycle 2: incremental rendering on streaming. Only re-wrap
+and redraw the in-flight assistant turn instead of the whole conversation
+per chunk. Bigger win than canvas alone.
+
+### Menu screen
+
+Entry: `Fn+S` from chat opens the menu. `Backspace` returns.
+
+Items (charles-curated):
+  1. models           -> picker
+  2. new chat         -> confirm -> clear history
+  3. history depth    -> 5 / 10 / 20 / 40 / 60 picker (NVS-persisted)
+  4. system prompt    -> info screen with current text + sd override hint
+  5. wifi info        -> info screen with ssid, ip, rssi, gw, dns, mac, utc
+  6. diagnostics      -> info screen with build, model, depth, msg count,
+                         session file, heap (free/min/largest), uptime
+  7. exit             -> back to chat (same as backspace)
+
+Generic `Confirm` and `Info` modes are used by multiple places:
+  - Confirm: clear-chat AND switch-model both route through `confirmDestructive`
+    which holds (question, detail, onYes, returnTo).
+  - Info: any read-only screen passes (title, lines) and gets backspace handling
+    for free.
+
+Menu scrolls when items exceed visible window. Small ^ / v hints at the
+right edge show there's more above/below.
+
+### Mode-aware input semantics (confirmed pattern)
+
+Chat mode (text-entry intent):
+  - `,` and `.` type characters
+  - `Fn+,` / `Fn+;` scroll up; `Fn+.` / `Fn+/` scroll down
+  - `Fn+N` confirm-then-clear; `Fn+M` open picker; `Fn+S` open menu
+
+Menu / Picker / DepthPicker modes (no text-entry intent):
+  - plain `,` / `;` move selection up
+  - plain `.` / `/` move selection down
+  - `Fn+,` / `Fn+.` also work as a redundant fallback (muscle memory)
+  - `Enter` activates selection
+  - `Backspace` goes back one level
+
+Confirm mode: `y` / `Enter` = yes; `n` / `Backspace` = no.
+
+### NVS-backed settings
+
+`src/storage/settings.{h,cpp}` wraps Arduino `Preferences` under the
+namespace `cardputerllm`. Currently only stores `histdepth` (NVS key
+must be <= 15 chars). Default 20, range clamped to [2, 200]. Persists
+across reboots and across reflashes (NVS is wiped only by Launcher's
+"clear NVS" option or `nvs_flash_erase()`).
+
 ## Phase 3+ deferrals
 
 - Battery percentage readout math on the ADV (1750mAh, different topology

@@ -18,6 +18,7 @@
 #include <time.h>
 
 #include "storage/sd_config.h"
+#include "storage/settings.h"
 #include "ui/chat_screen.h"
 
 using namespace ESPAI;
@@ -152,8 +153,12 @@ void setup() {
                       (unsigned)sys.length());
     }
 
+    settings::begin();
+    int depth = settings::historyDepth();
+    Serial.printf("[settings] history depth: %d\n", depth);
+
     auto* ai = makeProvider(apiKey, kModels[kInitialModelIdx].slug);
-    g_chat = new ChatScreen(ai, sys, kModels, kInitialModelIdx);
+    g_chat = new ChatScreen(ai, sys, kModels, kInitialModelIdx, depth);
     g_chat->begin();
     Serial.println("[chat] ready");
 }
