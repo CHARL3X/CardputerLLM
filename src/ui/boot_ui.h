@@ -15,4 +15,12 @@ void leftText(const String& msg, int y, uint16_t color = 0xFFFF);
 
 void waitForAnyKey();
 
+// Typewriter-style diagnostic log used during the boot sequence.
+// startLog() clears the screen and draws a thin "BOOT" header.
+// step() appends one row with a dim dotted leader and a colored
+// [ok] / [!] status indicator. Each step takes ~120ms for pacing.
+void startLog();
+void step(const String& label, bool ok = true, const String& detail = "");
+void finishLog();
+
 } // namespace boot_ui

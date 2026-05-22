@@ -5,6 +5,7 @@
 #include "../setup/wifi_setup.h"
 #include "../setup/key_setup.h"
 #include "styled_text.h"
+#include "splash.h"
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <time.h>
@@ -113,6 +114,12 @@ void ChatScreen::tick() {
 
     // Ambient animation. Empty chat -> drives watermark motion. Streaming
     // -> drives the dot indicator. Anything else is idle (no refresh).
+    // Periodic status row refresh (every 5s) so time and RSSI stay current.
+    if (millis() - _statusTick > 5000) {
+        _statusTick = millis();
+        _statusDirty = true;
+    }
+
     bool emptyChat = (_mode == Mode::Chat && !_streaming && _conv.size() == 0);
     if (emptyChat && (millis() - _animTick) > 80) {
         _animTick = millis();
@@ -291,36 +298,8 @@ void ChatScreen::onDel() {
 void ChatScreen::onEnter() {
     if (_mode == Mode::Chat) {
         if (_input.length() == 0) return;
-        // Local slash commands: never sent to API, evaluated on-device.
-        if (_input == "/demo") {
-            static const char* kDemo =
-                "<<formatting demo>>\n"
-                "[k]inline tags[/k]\n"
-                "- [h]hot[/h] / [v]value[/v] / [?]aside[/?]\n"
-                "- [ok]success[/ok] [w]warning[/w] [!]error[/!]\n"
-                "\n"
-                "[k]block tags[/k]\n"
-                "> a quoted thought, indented with a bar.\n"
-                "\n"
-                "[k]progress[/k]\n"
-                "[bar:18]\n"
-                "[bar:62]\n"
-                "[bar:94]\n"
-                "\n"
-                "[k]code[/k]\n"
-                "```\n"
-                "int x = 0;\n"
-                "while (x < n) x++;\n"
-                "```\n"
-                "---\n"
-                "[?]rendered locally; no api call.[/?]";
-            _conv.addUserMessage(_input);
-            _conv.addAssistantMessage(kDemo);
-            _input = "";
-            _scrollOffset = 0; _autoScroll = true;
-            _bodyDirty = _inputDirty = true;
-            return;
-        }
+        // Local slash commands: never sent to API.
+        if (_input.charAt(0) == '/' && handleSlashCommand(_input)) return;
         sendCurrent();
         return;
     }
@@ -508,6 +487,187 @@ void ChatScreen::sendCurrent() {
     _bodyDirty = _inputDirty = true;
 }
 
+void ChatScreen::addLocalExchange(const String& userMsg, const String& assistantMsg) {
+    _conv.addUserMessage(userMsg);
+    _conv.addAssistantMessage(assistantMsg);
+    _input = "";
+    _scrollOffset = 0; _autoScroll = true;
+    _bodyDirty = _inputDirty = true;
+}
+
+String ChatScreen::buildDiagSummary() const {
+    String s;
+    s += "<<diagnostics>>\n";
+    s += "[k]model[/k]   [v]"; s += _models[_modelIdx].label; s += "[/v]\n";
+    s += "[k]ssid[/k]    [v]"; s += WiFi.SSID(); s += "[/v]\n";
+    s += "[k]ip[/k]      [v]"; s += WiFi.localIP().toString(); s += "[/v]\n";
+    s += "[k]rssi[/k]    [v]"; s += String(WiFi.RSSI()); s += " dBm[/v]\n";
+    s += "[k]depth[/k]   [v]"; s += String(_historyDepth); s += "[/v]\n";
+    s += "[k]msgs[/k]    [v]"; s += String((unsigned)_conv.size()); s += "[/v]\n";
+    s += "[k]heap[/k]    [v]"; s += String((unsigned)ESP.getFreeHeap()); s += "[/v] free\n";
+    s += "         [v]"; s += String((unsigned)ESP.getMinFreeHeap()); s += "[/v] min";
+    return s;
+}
+
+bool ChatScreen::handleSlashCommand(const String& cmd) {
+    // /clear : wipe conversation and start fresh (no echo)
+    if (cmd == "/clear") {
+        newChat();
+        Serial.println("[slash] /clear");
+        return true;
+    }
+    // /splash : replay the boot wordmark sequence (easter egg)
+    if (cmd == "/splash") {
+        splash::run();
+        _input = "";
+        _statusDirty = _bodyDirty = _inputDirty = true;
+        renderAll();
+        return true;
+    }
+    // /demo : render every tag locally
+    if (cmd == "/demo") {
+        static const char* kDemo =
+            "<<formatting demo>>\n"
+            "[k]inline tags[/k]\n"
+            "- [h]hot[/h] / [v]value[/v] / [?]aside[/?]\n"
+            "- [ok]success[/ok] [w]warning[/w] [!]error[/!]\n"
+            "\n"
+            "[k]block tags[/k]\n"
+            "> a quoted thought, indented with a bar.\n"
+            "\n"
+            "[k]progress[/k]\n"
+            "[bar:18]\n"
+            "[bar:62]\n"
+            "[bar:94]\n"
+            "\n"
+            "[k]code[/k]\n"
+            "```\n"
+            "int x = 0;\n"
+            "while (x < n) x++;\n"
+            "```\n"
+            "---\n"
+            "[?]rendered locally; no api call.[/?]";
+        addLocalExchange(cmd, kDemo);
+        return true;
+    }
+    // /help : list of slash commands
+    if (cmd == "/help" || cmd == "/?") {
+        static const char* kHelp =
+            "<<commands>>\n"
+            "[k]/help[/k]    show this list\n"
+            "[k]/clear[/k]   wipe conversation\n"
+            "[k]/demo[/k]    preview formatting\n"
+            "[k]/save[/k]    force save to sd\n"
+            "[k]/sys[/k]     show system prompt\n"
+            "[k]/diag[/k]    diagnostics\n"
+            "[k]/splash[/k]  replay splash\n"
+            "[k]/model[/k] <name>  switch model\n"
+            "[k]/depth[/k] <n>     history (2-200)\n"
+            "---\n"
+            "[?]commands run locally. no api call.[/?]";
+        addLocalExchange(cmd, kHelp);
+        return true;
+    }
+    // /save
+    if (cmd == "/save") {
+        if (_conv.size() == 0) {
+            addLocalExchange(cmd, "[?]nothing to save yet[/?]");
+            return true;
+        }
+        if (_sessionFile.length() == 0) {
+            _sessionFile = chatstore::newSessionFilename();
+        }
+        bool ok = chatstore::saveSession(_sessionFile, _conv,
+                                         _models[_modelIdx].slug);
+        if (ok) {
+            String r = "[ok]saved[/ok]\n[k]file[/k] [v]/CardputerLLM/chats/";
+            r += _sessionFile; r += "[/v]";
+            addLocalExchange(cmd, r);
+        } else {
+            addLocalExchange(cmd, "[!]save failed[/!]");
+        }
+        return true;
+    }
+    // /sys : show current system prompt (full text)
+    if (cmd == "/sys") {
+        String r = "<<system prompt>>\n";
+        r += _systemPrompt;
+        addLocalExchange(cmd, r);
+        return true;
+    }
+    // /diag
+    if (cmd == "/diag" || cmd == "/info") {
+        addLocalExchange(cmd, buildDiagSummary());
+        return true;
+    }
+    // /model <name>
+    if (cmd.startsWith("/model")) {
+        String arg = cmd.substring(6); arg.trim();
+        if (arg.length() == 0) {
+            String r = "[k]current[/k] [v]";
+            r += _models[_modelIdx].label;
+            r += "[/v]\n[?]usage: /model <name>[/?]\n";
+            for (auto& m : _models) {
+                r += "- "; r += m.label; r += "\n";
+            }
+            addLocalExchange(cmd, r);
+            return true;
+        }
+        int found = -1;
+        for (size_t i = 0; i < _models.size(); i++) {
+            if (arg == _models[i].label || arg == _models[i].slug) {
+                found = (int)i;
+                break;
+            }
+        }
+        if (found < 0) {
+            // try prefix match
+            for (size_t i = 0; i < _models.size(); i++) {
+                if (String(_models[i].label).startsWith(arg)) {
+                    found = (int)i;
+                    break;
+                }
+            }
+        }
+        if (found < 0) {
+            addLocalExchange(cmd, "[!]unknown model: " + arg + "[/!]\ntry /model with no args.");
+            return true;
+        }
+        if (found == _modelIdx) {
+            addLocalExchange(cmd, "[?]already on " + String(_models[found].label) + "[/?]");
+            return true;
+        }
+        applyModel(found);
+        // Add a one-line note after the clear
+        _conv.addAssistantMessage("[ok]switched to " + String(_models[found].label) + "[/ok]");
+        _statusDirty = _bodyDirty = _inputDirty = true;
+        return true;
+    }
+    // /depth <n>
+    if (cmd.startsWith("/depth")) {
+        String arg = cmd.substring(6); arg.trim();
+        if (arg.length() == 0) {
+            String r = "[k]current[/k] [v]";
+            r += String(_historyDepth);
+            r += "[/v]\n[?]usage: /depth <2..200>[/?]";
+            addLocalExchange(cmd, r);
+            return true;
+        }
+        int v = arg.toInt();
+        if (v < 2 || v > 200) {
+            addLocalExchange(cmd, "[!]depth must be 2..200[/!]");
+            return true;
+        }
+        applyDepth(v);
+        addLocalExchange(cmd, "[ok]history depth -> " + String(v) + "[/ok]");
+        return true;
+    }
+
+    // Unknown
+    addLocalExchange(cmd, "[!]unknown command: " + cmd + "[/!]\ntry [k]/help[/k]");
+    return true;
+}
+
 void ChatScreen::newChat() {
     Serial.println("[chat] new session");
     _conv.clear();
@@ -600,6 +760,24 @@ void ChatScreen::renderStatus() {
     } else {
         // Tiny LED-style dot in the corner when idle in chat.
         M5Cardputer.Display.fillRect(kPadX, 4, 3, 3, kStatusAccent);
+
+        // WiFi signal bars: 4 stair-stepped verticals just right of the LED.
+        if (WiFi.status() == WL_CONNECTED) {
+            int rssi = WiFi.RSSI();
+            int bars = 0;
+            if (rssi > -85) bars = 1;
+            if (rssi > -75) bars = 2;
+            if (rssi > -65) bars = 3;
+            if (rssi > -55) bars = 4;
+            int baseX = kPadX + 8;
+            int baseY = 9; // bottom of bars
+            for (int b = 0; b < 4; b++) {
+                int h = 2 + b;
+                int x = baseX + b * 3;
+                uint16_t col = (b < bars) ? kStatusAccent : 0x2104;
+                M5Cardputer.Display.fillRect(x, baseY - h, 2, h, col);
+            }
+        }
     }
 
     M5Cardputer.Display.setFont(&fonts::Font2);

@@ -1,120 +1,169 @@
-# CardputerLLM (placeholder name)
+# CardputerLLM
 
-Keyboard-first LLM client for the M5Stack Cardputer ADV. The keyboard is
-the feature. The device is a pocket terminal for talking to large language
-models over a wire you control. Not a chatbot toy.
+Keyboard-first LLM terminal for the M5Stack Cardputer ADV. A pocket
+device, a real QWERTY, a wire out to a model under your control.
+
+```
+    ─── CARDPUTER ────────
+              L L M
+    ─── phase 8 . dev ────
+```
+
+## What it is
+
+- Streams from any OpenAI-compatible API (currently wired to OpenRouter,
+  with a curated trio: GPT-5, Claude Sonnet 4.5, Gemini 2.5 Pro)
+- Chat history with configurable depth (5..60 messages, persisted in NVS)
+- Each session saved to SD as JSON, timestamped via NTP
+- A small markup dialect the model is taught via system prompt; the
+  device renders inline highlights, headers, dividers, bullets, quotes,
+  code blocks, and actual filled progress bars (`[bar:60]`)
+- Markdown coexistence: if the model slips and uses `**bold**` or `#`
+  the renderer converts it on the fly
+- First-run onboarding on-device: scan WiFi networks, paste the API key
+  via a tiny HTTP form on the device's IP. No SD prep required to flash
+  and run
 
 ## Status
 
-Phase 2 of 9: ESPAI proof against OpenRouter. Boots, connects WiFi, fires
-one BasicChat then one StreamingChat against `openai/gpt-4o-mini`, prints
-results to USB serial and streams tokens to the display body. No chat UI
-or keyboard input yet.
+Phase 8 polish cycle: chat UI is the daily driver. Onboarding works,
+formatting works, menu works, history persists across reboots.
 
-## First boot (no SD prep)
+## Hardware
 
-You can flash and run without preparing the SD at all. On first boot
-the device will:
+- M5Stack Cardputer ADV (ESP32-S3FN8 via Stamp-S3A, 8 MB flash, no PSRAM)
+- 1.14" ST7789V2 IPS, 240x135
+- 56-key QWERTY, TCA8418 I²C scanner (the ADV's lighter switches)
+- microSD for credentials + chat history
+- Runs as a Launcher app via [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher)
 
-1. Show a WiFi scan, you pick a network and type the password on the
-   Cardputer keyboard.
-2. After WiFi connects, show a URL like `http://192.168.x.x`. Open it
-   on your phone or computer and paste your OpenRouter key into the form.
-3. Both creds are saved to `/CardputerLLM/wifi.txt` and
-   `/CardputerLLM/openrouter.txt` automatically.
-
-Subsequent boots are silent: stored creds load, device associates,
-chat is ready.
-
-## Credentials live on the SD card, not in the binary
-
-The compiled `dist/CardputerLLM.bin` contains no credentials. Dump the
-flash and you get nothing.
-
-If you'd rather pre-populate the SD instead of using the setup UI:
-
-`/CardputerLLM/openrouter.txt` (one line):
-
-    sk-or-v1-...
-
-`/CardputerLLM/wifi.txt` (ssid then password, one per line; pairs tried
-in order; lines starting with `#` are ignored):
-
-    MyHomeNetwork
-    mypassword
-    BackupNetwork
-    backuppassword
-
-`dist/sd/CardputerLLM/` is a local staging area (gitignored) if you
-want to mirror files onto the card.
-
-## Changing creds later
-
-From the chat screen, press `Fn+S` to open the menu:
-- "add wifi" runs the same scan/pick/password flow and appends to wifi.txt
-- "set api key" spins up the same web form so you can paste a new key
-
-## Trust note for the web form
-
-The key entry page is HTTP on port 80 with no auth. It only runs while
-no key is present (boot) or while you explicitly invoked "set api key"
-(transient). Anyone on the same LAN during that window could submit a
-key. Acceptable for personal use; do the initial setup on a network
-you control.
+Should also work on the original Cardputer (M5Cardputer library does
+runtime board detection and swaps the keyboard reader); not verified yet.
 
 ## Build
 
-PlatformIO required. From this directory:
+Requires PlatformIO. From this directory:
 
     pio run
 
-## Deploy via Launcher (primary path)
+Output: `dist/CardputerLLM.bin` (the app-only binary that Launcher loads).
 
-The Cardputer ADV runs [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher)
-as its persistent firmware. Each `pio run` drops an app-only binary at:
+## Deploy (via Launcher)
 
-    dist/CardputerLLM.bin
+Copy `dist/CardputerLLM.bin` to `/downloads/` on your microSD, insert,
+and install via Launcher's `SD` menu. Launcher handles flashing into
+the app partition.
 
-Copy that file to the microSD card, insert into the Cardputer, and use
-Launcher's `SD` menu to install it. Launcher copies it into the device's
-app partition and launches it.
+For direct USB flash (dev only, overwrites Launcher):
 
-SD card requirements (from Launcher docs):
+    pio run -t upload
 
-- SDHC, not SDXC
-- 32 GB or smaller
-- FAT32
-- MBR partition scheme
+Power switch OFF, hold G0, plug USB-C, release G0 first.
 
-## Monitor
+## First boot (no SD prep)
 
-    pio device monitor
+The first time you run, the device walks you through setup:
 
-USB CDC at 115200. Echo prints each pressed character; Enter prints the
-full buffered line as `[line] ...`.
+1. **WiFi:** a scan list of nearby networks. Pick one, type the password
+   on the Cardputer keyboard, Enter.
+2. **API key:** the device shows its IP like `http://192.168.x.x`. Open
+   it on your phone or laptop and paste your OpenRouter key (format
+   `sk-or-v1-...`) into the small form. Submit.
 
-## Direct USB flash (alternative, dev-only)
+Both creds are saved to `/CardputerLLM/wifi.txt` and `openrouter.txt` on
+the SD. Subsequent boots are silent.
 
-If you ever want to bypass Launcher and flash this build directly:
+To pre-populate the SD instead, drop those files at `/CardputerLLM/`
+manually. See [`include/secrets.h.example`](include/secrets.h.example)
+(historical) for format; current docs in `NOTES.md`.
 
-1. Power switch OFF.
-2. Hold the G0 button on the back.
-3. Plug USB-C.
-4. Release G0. Device is in download mode.
-5. `pio run -t upload`
+## In the app
 
-This will overwrite Launcher. Not the normal workflow.
+| Key | Action |
+|-----|--------|
+| Type + Enter | send to model |
+| `` ` `` or `~` | open menu (also closes / backs out) |
+| `Fn+S` | open menu (alt shortcut) |
+| `Fn+N` | new chat (with confirm) |
+| `Fn+M` | model picker |
+| `Fn+,` or `Fn+;` | scroll up (hold to repeat) |
+| `Fn+.` or `Fn+/` | scroll down (hold to repeat) |
+| Backspace | delete (hold to repeat), or back / close menu |
 
-## Name candidates
+Menu items: models, new chat, history depth, system prompt, wifi info,
+add wifi, set api key, diagnostics, exit.
 
-Three to pick from. Charles picks.
+### Slash commands (local, no API call)
 
-- **Telex** — electromechanical typed messaging, point to point. The
-  metaphor for "talking to an LLM over a wire" is exact.
-- **Slate** — clean, terminal, fits the hand.
-- **Margin** — the conversation happens in the margins of whatever else
-  you're doing.
+| Command | What |
+|---------|------|
+| `/help` | list these |
+| `/clear` | wipe the current conversation |
+| `/demo` | render every formatting tag locally |
+| `/save` | force-save the current chat to SD |
+| `/sys` | show the active system prompt |
+| `/diag` | diagnostics (model, wifi, heap, etc.) |
+| `/splash` | replay the boot wordmark |
+| `/model <name>` | switch model by label or slug |
+| `/depth <n>` | set history depth (2..200) |
+
+## The markup dialect
+
+The model is taught a small set of tags via system prompt. The device
+parses and renders them; markdown is converted on the fly if the model
+slips.
+
+**Inline (mid-line):**
+
+| Tag | Render |
+|-----|--------|
+| `[h]hot[/h]` | yellow highlight |
+| `[k]key[/k]` | dim warm label |
+| `[v]value[/v]` | cream value |
+| `[ok]text[/ok]` | green `+ ` prefix |
+| `[w]text[/w]` | orange `! ` prefix |
+| `[!]text[/!]` | red `x ` prefix |
+| `[?]text[/?]` | very dim aside |
+
+**Block (whole line):**
+
+| Syntax | Render |
+|--------|--------|
+| `<<title>>` | section header with amber hairlines |
+| `---` | horizontal divider |
+| `- item` | bullet (tiny amber square) |
+| `> quote` | left vertical bar + indented dim text |
+| `[bar:NN]` | filled rectangle, NN=0..100, with percent label |
+| ` ```code``` ` | code block, dim background, no wrap |
+
+Type `/demo` in the app to see all of them at once.
+
+## SD card layout
+
+```
+/CardputerLLM/
+  openrouter.txt         single line, your API key
+  wifi.txt               ssid + password pairs, line per
+  system.txt             optional persona override (format tags always on)
+  chats/
+    YYYYMMDDTHHMMSSZ.json  timestamped sessions
+```
+
+If you delete a file, the next boot's setup flow handles the gap.
+
+## Security note
+
+The web form for entering the API key runs HTTP on port 80 with no auth.
+It listens only while no key is present (boot) or during an explicit
+"set api key" invocation from the menu. Window equals setup duration.
+Do the initial setup on a network you trust.
+
+The compiled binary contains zero credentials.
 
 ## License
 
-TBD.
+[MIT](LICENSE).
+
+## Repo
+
+https://github.com/CHARL3X/CardputerLLM

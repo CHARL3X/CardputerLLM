@@ -190,6 +190,126 @@ void wrapSegments(M5Canvas& canvas,
     }
 }
 
+// Convert common markdown patterns to our tag dialect. Defensive layer
+// for when the model slips and uses markdown despite the system prompt.
+//   **bold**       -> [h]bold[/h]
+//   *italic*       -> [v]italic[/v]
+//   `code`         -> [k]code[/k]
+//   # heading      -> <<heading>>
+//   * item / - item / 1. item   -> - item
+//   leading >      -> > (passes through; we already handle it)
+//   ``` blocks pass through unchanged (we already render them)
+String markdownToTags(const String& src) {
+    String out;
+    out.reserve(src.length() + 32);
+    const int n = src.length();
+    int i = 0;
+    while (i < n) {
+        char c = src.charAt(i);
+        bool atLineStart = (i == 0) || (src.charAt(i - 1) == '\n');
+
+        // Code fence: pass through verbatim until closing fence so we don't
+        // mutate code content (might contain '*' or '#').
+        if (atLineStart && c == '`' && i + 2 < n
+            && src.charAt(i + 1) == '`' && src.charAt(i + 2) == '`') {
+            int end = src.indexOf("\n```", i + 3);
+            int copyEnd = (end < 0) ? n : end + 4; // include closing fence + newline
+            out += src.substring(i, copyEnd);
+            i = copyEnd;
+            continue;
+        }
+
+        // # / ## / ### heading at line start
+        if (atLineStart && c == '#') {
+            int j = i;
+            while (j < n && src.charAt(j) == '#') j++;
+            int hashCount = j - i;
+            if (hashCount >= 1 && hashCount <= 6 && j < n && src.charAt(j) == ' ') {
+                int lineEnd = src.indexOf('\n', j);
+                if (lineEnd < 0) lineEnd = n;
+                String title = src.substring(j + 1, lineEnd);
+                title.trim();
+                out += "<<";
+                out += title;
+                out += ">>";
+                i = lineEnd;
+                continue;
+            }
+        }
+
+        // Numbered bullets: "1. " / "12. " etc at line start -> "- "
+        if (atLineStart && isDigit(c)) {
+            int j = i;
+            while (j < n && isDigit(src.charAt(j))) j++;
+            if (j + 1 < n && src.charAt(j) == '.' && src.charAt(j + 1) == ' ') {
+                out += "- ";
+                i = j + 2;
+                continue;
+            }
+        }
+        // Asterisk bullet at line start -> "- "
+        if (atLineStart && c == '*' && i + 1 < n && src.charAt(i + 1) == ' ') {
+            out += "- ";
+            i += 2;
+            continue;
+        }
+
+        // **bold** -> [h]
+        if (c == '*' && i + 1 < n && src.charAt(i + 1) == '*') {
+            int searchFrom = i + 2;
+            int end = src.indexOf("**", searchFrom);
+            if (end > searchFrom && end - searchFrom <= 120) {
+                out += "[h]";
+                out += src.substring(searchFrom, end);
+                out += "[/h]";
+                i = end + 2;
+                continue;
+            }
+        }
+        // *italic* -> [v] (single-asterisk, must not be a bullet at line start)
+        if (c == '*' && i + 1 < n
+            && src.charAt(i + 1) != '*' && src.charAt(i + 1) != ' ') {
+            int searchFrom = i + 1;
+            int end = -1;
+            for (int k = searchFrom; k < n; k++) {
+                if (src.charAt(k) == '*') {
+                    // avoid matching '**'
+                    if (k + 1 < n && src.charAt(k + 1) == '*') continue;
+                    end = k;
+                    break;
+                }
+                if (src.charAt(k) == '\n') break;
+            }
+            if (end > searchFrom && end - searchFrom <= 120) {
+                out += "[v]";
+                out += src.substring(searchFrom, end);
+                out += "[/v]";
+                i = end + 1;
+                continue;
+            }
+        }
+        // `inline` -> [k]
+        if (c == '`' && (i + 1 >= n || src.charAt(i + 1) != '`')) {
+            int end = -1;
+            for (int k = i + 1; k < n; k++) {
+                if (src.charAt(k) == '`') { end = k; break; }
+                if (src.charAt(k) == '\n') break;
+            }
+            if (end > i + 1 && end - (i + 1) <= 80) {
+                out += "[k]";
+                out += src.substring(i + 1, end);
+                out += "[/k]";
+                i = end + 1;
+                continue;
+            }
+        }
+
+        out += c;
+        i++;
+    }
+    return out;
+}
+
 } // namespace
 
 void parse(M5Canvas& canvas, const String& src,
@@ -210,18 +330,23 @@ void parse(M5Canvas& canvas, const String& src,
         return;
     }
 
-    // Split src into logical lines. We need to detect code fences which
+    // Defensive pre-pass: convert any markdown the model slipped in into
+    // our tag dialect. The parser below then sees a canonical input.
+    String normalized = markdownToTags(src);
+    const String& work = normalized;
+
+    // Split work into logical lines. We need to detect code fences which
     // span multiple lines, so we walk line by line and track a "in code"
     // flag.
     int i = 0;
-    const int n = (int)src.length();
+    const int n = (int)work.length();
     bool inCode = false;
 
     while (i < n) {
         // Read up to next newline
-        int e = src.indexOf('\n', i);
+        int e = work.indexOf('\n', i);
         if (e < 0) e = n;
-        String raw = src.substring(i, e);
+        String raw = work.substring(i, e);
 
         // Trim trailing CR for safety
         if (raw.length() > 0 && raw.charAt(raw.length() - 1) == '\r') {

@@ -53,7 +53,6 @@ static constexpr const char* kDefaultPersona =
     "when possible. Use the format tags above when they materially help.";
 
 static bool tryWiFi(const String& ssid, const String& pw, uint32_t timeoutMs) {
-    boot_ui::header(String("wifi: ") + ssid);
     Serial.printf("[wifi] try '%s'\n", ssid.c_str());
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
@@ -65,13 +64,14 @@ static bool tryWiFi(const String& ssid, const String& pw, uint32_t timeoutMs) {
     return WiFi.status() == WL_CONNECTED;
 }
 
-static bool connectWiFiFromList(const std::vector<WiFiCred>& creds) {
+static bool connectWiFiFromList(const std::vector<WiFiCred>& creds,
+                                String* successSsid = nullptr) {
     for (auto& c : creds) {
         if (tryWiFi(c.ssid, c.password, 12000)) {
             String ip = WiFi.localIP().toString();
-            boot_ui::header(String("wifi ok: ") + ip);
             Serial.printf("[wifi] connected on '%s' ip=%s\n",
                           c.ssid.c_str(), ip.c_str());
+            if (successSsid) *successSsid = c.ssid;
             return true;
         }
         Serial.printf("[wifi] timeout on '%s'\n", c.ssid.c_str());
@@ -95,6 +95,16 @@ static void halt(const String& head, const String& foot) {
     boot_ui::footer(foot, 0xF800);
     Serial.printf("[halt] %s | %s\n", head.c_str(), foot.c_str());
     while (true) delay(1000);
+}
+
+static bool syncTimeQuiet() {
+    configTime(0, 0, "pool.ntp.org", "time.google.com");
+    uint32_t t0 = millis();
+    time_t now;
+    while ((now = time(nullptr)) < 1577836800 && (millis() - t0) < 5000) {
+        delay(200);
+    }
+    return now >= 1577836800;
 }
 
 static void syncTime() {
@@ -127,61 +137,72 @@ void setup() {
     Serial.println("[boot] cardputerllm phase 8.3 (splash + empty state)");
 
     splash::run();
+    boot_ui::startLog();
 
-    boot_ui::header("boot");
-    boot_ui::footer("mounting sd...");
-
-    if (!sdcfg::begin()) halt("sd: mount failed", "insert sd card");
+    bool sdOk = sdcfg::begin();
+    boot_ui::step("mounting sd", sdOk);
+    if (!sdOk) halt("sd: mount failed", "insert sd card");
     sdcfg::ensureChatsDir();
 
-    // ---- WiFi: try existing creds first, fall back to setup UI ----
     auto creds = sdcfg::loadWiFi();
-    bool connected = false;
-    if (!creds.empty()) {
-        Serial.printf("[sd] %u wifi candidates\n", (unsigned)creds.size());
-        connected = connectWiFiFromList(creds);
-    } else {
-        Serial.println("[sd] no wifi.txt or empty");
-    }
+    boot_ui::step("loaded wifi.txt", true,
+                  String((unsigned)creds.size()) + " saved network(s)");
+
+    String connectedSsid;
+    bool connected = !creds.empty() && connectWiFiFromList(creds, &connectedSsid);
     if (!connected) {
+        boot_ui::step("wifi", false, "all entries failed");
+        delay(400);
         Serial.println("[boot] entering wifi setup");
-        if (!wifi_setup::run(/*allowCancel=*/false)) {
-            halt("wifi setup cancelled", "");
-        }
-    }
-
-    syncTime();
-
-    // ---- System prompt ----
-    // Format-tag rules are ALWAYS prepended so styled rendering works even
-    // when the user supplies a custom persona via system.txt.
-    String userPersona = sdcfg::loadSystemPrompt();
-    if (userPersona.length() == 0) {
-        userPersona = kDefaultPersona;
-        Serial.println("[sys] using built-in default persona");
+        if (!wifi_setup::run(/*allowCancel=*/false)) halt("wifi setup cancelled", "");
+        connectedSsid = WiFi.SSID();
+        boot_ui::startLog();
+        boot_ui::step("mounting sd", true);
+        boot_ui::step("loaded wifi.txt", true,
+                      String((unsigned)sdcfg::loadWiFi().size()) + " saved network(s)");
+        boot_ui::step("wifi", true, connectedSsid + " . " + WiFi.localIP().toString());
     } else {
-        Serial.printf("[sys] loaded /CardputerLLM/system.txt (%u chars)\n",
-                      (unsigned)userPersona.length());
+        boot_ui::step("wifi", true, connectedSsid + " . " + WiFi.localIP().toString());
     }
+
+    bool ntpOk = syncTimeQuiet();
+    boot_ui::step("ntp sync", ntpOk, ntpOk ? "" : "(skipped)");
+
+    String userPersona = sdcfg::loadSystemPrompt();
+    bool customSys = userPersona.length() > 0;
+    if (!customSys) userPersona = kDefaultPersona;
+    boot_ui::step("system prompt", true,
+                  customSys ? "loaded /system.txt" : "built-in default");
     String sys = String(kFormatPrompt) + "\n" + userPersona;
 
-    // ---- API key: load from SD, or run web setup ----
     String apiKey = sdcfg::loadOpenRouterKey();
     if (apiKey.length() == 0) {
+        boot_ui::step("api key", false, "none on sd");
+        delay(400);
         Serial.println("[boot] no api key; entering web setup");
-        if (!key_setup::run(/*allowCancel=*/false)) {
-            halt("key setup cancelled", "");
-        }
+        if (!key_setup::run(/*allowCancel=*/false)) halt("key setup cancelled", "");
         apiKey = sdcfg::loadOpenRouterKey();
         if (apiKey.length() == 0) halt("key save inconsistent", "");
+        boot_ui::startLog();
+        boot_ui::step("mounting sd", true);
+        boot_ui::step("wifi", true, WiFi.SSID() + " . " + WiFi.localIP().toString());
+        boot_ui::step("ntp sync", ntpOk);
+        boot_ui::step("system prompt", true,
+                      customSys ? "loaded /system.txt" : "built-in default");
+        boot_ui::step("api key", true, "saved");
+    } else {
+        boot_ui::step("api key", true, "loaded from sd");
     }
 
-    // ---- Settings + chat ----
     settings::begin();
     int depth = settings::historyDepth();
-    Serial.printf("[settings] history depth: %d\n", depth);
+    boot_ui::step("history depth", true, String(depth) + " messages");
 
     auto* ai = makeProvider(apiKey, kModels[kInitialModelIdx].slug);
+    boot_ui::step("openrouter", true, kModels[kInitialModelIdx].label);
+
+    boot_ui::finishLog();
+
     g_chat = new ChatScreen(ai, sys, kModels, kInitialModelIdx, depth);
     g_chat->begin();
     Serial.println("[chat] ready");

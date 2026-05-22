@@ -152,6 +152,14 @@ private:
     // ---- empty-state renderer ----
     void renderEmptyChat();
 
+    // ---- local slash commands (no API call) ----
+    bool handleSlashCommand(const String& cmd);
+    void addLocalExchange(const String& userMsg, const String& assistantMsg);
+    String buildDiagSummary() const;
+
+    // ---- periodic status row refresh (for RSSI/time updates) ----
+    uint32_t _statusTick = 0;
+
     // ---- offscreen body buffer ----
     M5Canvas _bodyCanvas;
     bool     _canvasOk = false;
