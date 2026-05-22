@@ -1,7 +1,27 @@
 #pragma once
 #include <Arduino.h>
+#include <vector>
+#include "../storage/sd_config.h"
 
 namespace wifi_setup {
+
+struct ScanResult {
+    String ssid;
+    int    rssi;
+    bool   secured;
+};
+
+// Synchronous WiFi scan. Returns visible networks deduped by SSID,
+// strongest signal first. Shows a "scanning" screen during.
+std::vector<ScanResult> scanNow(bool showUI = true);
+
+// Filters `saved` down to those that appear in `visible`, ordered by the
+// visible RSSI (strongest first). Saved entries with no matching scan
+// result are dropped so we don't waste 12s waiting for ghosts.
+std::vector<WiFiCred> filterByVisibility(
+    const std::vector<WiFiCred>& saved,
+    const std::vector<ScanResult>& visible);
+
 
 // Interactive WiFi onboarding: scan, pick from list, enter password,
 // connect. On success, the (ssid, password) pair is appended to

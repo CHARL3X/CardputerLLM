@@ -148,10 +148,25 @@ void setup() {
     boot_ui::step("loaded wifi.txt", true,
                   String((unsigned)creds.size()) + " saved network(s)");
 
+    // Scan first so we only attempt saved networks that are actually in
+    // range. Saves up to ~24s if none of the saved networks are present.
     String connectedSsid;
-    bool connected = !creds.empty() && connectWiFiFromList(creds, &connectedSsid);
+    bool connected = false;
+    if (!creds.empty()) {
+        auto visible = wifi_setup::scanNow(false);
+        boot_ui::step("wifi scan", true,
+                      String((unsigned)visible.size()) + " in range");
+        auto candidates = wifi_setup::filterByVisibility(creds, visible);
+        if (candidates.empty()) {
+            boot_ui::step("matched saved", false, "none of yours nearby");
+        } else {
+            boot_ui::step("matched saved", true,
+                          String((unsigned)candidates.size()) + " candidate(s)");
+            connected = connectWiFiFromList(candidates, &connectedSsid);
+        }
+    }
     if (!connected) {
-        boot_ui::step("wifi", false, "all entries failed");
+        boot_ui::step("wifi", false, creds.empty() ? "no saved networks" : "candidates rejected");
         delay(400);
         Serial.println("[boot] entering wifi setup");
         if (!wifi_setup::run(/*allowCancel=*/false)) halt("wifi setup cancelled", "");
@@ -164,6 +179,7 @@ void setup() {
     } else {
         boot_ui::step("wifi", true, connectedSsid + " . " + WiFi.localIP().toString());
     }
+
 
     bool ntpOk = syncTimeQuiet();
     boot_ui::step("ntp sync", ntpOk, ntpOk ? "" : "(skipped)");

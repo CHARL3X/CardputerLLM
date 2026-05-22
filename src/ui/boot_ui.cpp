@@ -135,6 +135,43 @@ void finishLog() {
     delay(380);
 }
 
+void sectionHeader(const String& title, uint16_t accent) {
+    constexpr int kPad = 6;
+    constexpr int kH   = 16;
+    M5Cardputer.Display.fillRect(0, 0, 240, kH, TFT_BLACK);
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(accent, TFT_BLACK);
+    int midY    = kH / 2;
+    int leftEnd = kPad + 10;
+    M5Cardputer.Display.drawLine(kPad, midY, leftEnd, midY, accent);
+    M5Cardputer.Display.setCursor(leftEnd + 4, 1);
+    M5Cardputer.Display.print(title);
+    int tw = M5Cardputer.Display.textWidth(title.c_str());
+    int rightStart = leftEnd + 4 + tw + 4;
+    M5Cardputer.Display.drawLine(rightStart, midY, 240 - kPad, midY, accent);
+}
+
+void hintBar(const String& line1, const String& line2) {
+    constexpr int kH = 22;
+    constexpr int kPad = 4;
+    constexpr uint16_t kDiv = 0x2104;
+    constexpr uint16_t kDim = 0x6B4D;
+    int y = 135 - kH;
+    M5Cardputer.Display.fillRect(0, y, 240, kH, TFT_BLACK);
+    M5Cardputer.Display.drawLine(0, y, 240, y, kDiv);
+    M5Cardputer.Display.setFont(&fonts::Font0);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(kDim, TFT_BLACK);
+    M5Cardputer.Display.setCursor(kPad, y + 4);
+    M5Cardputer.Display.print(line1);
+    if (line2.length() > 0) {
+        M5Cardputer.Display.setCursor(kPad, y + 13);
+        M5Cardputer.Display.print(line2);
+    }
+    M5Cardputer.Display.setFont(&fonts::Font2);
+}
+
 void waitForAnyKey() {
     // Wait for current keys to release, then for any new press.
     while (true) {

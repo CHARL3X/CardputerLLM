@@ -13,6 +13,14 @@ void footer(const String& msg, uint16_t bg = 0x7BEF);     // dark grey
 void centerText(const String& msg, int y, uint16_t color = 0xFFFF);
 void leftText(const String& msg, int y, uint16_t color = 0xFFFF);
 
+// Polished section header in chat-style: amber hairlines flanking a title.
+// No filled background, matches the in-app block <<header>> style.
+void sectionHeader(const String& title, uint16_t accent = 0xFD60);
+
+// Two-line bottom hint area. Lines render in a dim color with a hairline
+// separator above. Used by setup screens for key-binding cheat sheets.
+void hintBar(const String& line1, const String& line2 = "");
+
 void waitForAnyKey();
 
 // Typewriter-style diagnostic log used during the boot sequence.
