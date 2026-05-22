@@ -29,10 +29,28 @@ static const std::vector<ModelChoice> kModels = {
 };
 static constexpr int kInitialModelIdx = 1;
 
-static constexpr const char* kDefaultSystemPrompt =
-    "You are running on a Cardputer, a credit-card-sized pocket "
-    "terminal with a 30-column display and a real QWERTY keyboard. "
-    "Be concise. Plain text only, no markdown.";
+// Format-tag instructions. ALWAYS prepended to whatever persona prompt
+// is loaded so the rendering layer applies even when the user overrides
+// the personality via /CardputerLLM/system.txt.
+static constexpr const char* kFormatPrompt =
+    "You are replying through a Cardputer: 240x135 px, 30 cols, monospace.\n"
+    "Do NOT use markdown (**bold**, # heading, ```fences, links, etc).\n"
+    "The device renders only these tags. Use them when they add visual\n"
+    "clarity; plain prose is preferred for short conversational answers.\n"
+    "Inline tags:\n"
+    "  [h]hot[/h] [k]label[/k] [v]value[/v] [?]aside[/?]\n"
+    "  [ok]success[/ok] [w]warn[/w] [!]error[/!]\n"
+    "Block lines (each on its own line):\n"
+    "  <<section title>>\n"
+    "  ---  (horizontal divider)\n"
+    "  - bulleted item\n"
+    "  > quoted line\n"
+    "  [bar:NN]  (renders a filled progress bar, NN=0..100)\n"
+    "  ```lang ... ``` (multi-line code block; lines are NOT word-wrapped)\n";
+
+static constexpr const char* kDefaultPersona =
+    "You are concise. Aim for replies that fit in 7 lines of 30 columns "
+    "when possible. Use the format tags above when they materially help.";
 
 static bool tryWiFi(const String& ssid, const String& pw, uint32_t timeoutMs) {
     boot_ui::header(String("wifi: ") + ssid);
@@ -135,14 +153,17 @@ void setup() {
     syncTime();
 
     // ---- System prompt ----
-    String sys = sdcfg::loadSystemPrompt();
-    if (sys.length() == 0) {
-        sys = kDefaultSystemPrompt;
-        Serial.println("[sys] using built-in default prompt");
+    // Format-tag rules are ALWAYS prepended so styled rendering works even
+    // when the user supplies a custom persona via system.txt.
+    String userPersona = sdcfg::loadSystemPrompt();
+    if (userPersona.length() == 0) {
+        userPersona = kDefaultPersona;
+        Serial.println("[sys] using built-in default persona");
     } else {
         Serial.printf("[sys] loaded /CardputerLLM/system.txt (%u chars)\n",
-                      (unsigned)sys.length());
+                      (unsigned)userPersona.length());
     }
+    String sys = String(kFormatPrompt) + "\n" + userPersona;
 
     // ---- API key: load from SD, or run web setup ----
     String apiKey = sdcfg::loadOpenRouterKey();

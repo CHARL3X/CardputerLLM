@@ -4,6 +4,7 @@
 #include "../storage/settings.h"
 #include "../setup/wifi_setup.h"
 #include "../setup/key_setup.h"
+#include "styled_text.h"
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <time.h>
@@ -289,7 +290,38 @@ void ChatScreen::onDel() {
 
 void ChatScreen::onEnter() {
     if (_mode == Mode::Chat) {
-        if (_input.length() > 0) sendCurrent();
+        if (_input.length() == 0) return;
+        // Local slash commands: never sent to API, evaluated on-device.
+        if (_input == "/demo") {
+            static const char* kDemo =
+                "<<formatting demo>>\n"
+                "[k]inline tags[/k]\n"
+                "- [h]hot[/h] / [v]value[/v] / [?]aside[/?]\n"
+                "- [ok]success[/ok] [w]warning[/w] [!]error[/!]\n"
+                "\n"
+                "[k]block tags[/k]\n"
+                "> a quoted thought, indented with a bar.\n"
+                "\n"
+                "[k]progress[/k]\n"
+                "[bar:18]\n"
+                "[bar:62]\n"
+                "[bar:94]\n"
+                "\n"
+                "[k]code[/k]\n"
+                "```\n"
+                "int x = 0;\n"
+                "while (x < n) x++;\n"
+                "```\n"
+                "---\n"
+                "[?]rendered locally; no api call.[/?]";
+            _conv.addUserMessage(_input);
+            _conv.addAssistantMessage(kDemo);
+            _input = "";
+            _scrollOffset = 0; _autoScroll = true;
+            _bodyDirty = _inputDirty = true;
+            return;
+        }
+        sendCurrent();
         return;
     }
     if (_mode == Mode::Menu) {
@@ -623,60 +655,63 @@ void ChatScreen::renderEmptyChat() {
     int pipX = 18 + (_animPhase * 3) % (kScreenW - 36);
     _bodyCanvas.fillRect(pipX - 1, yLine - 1, 3, 3, kStatusAccent);
 
-    // Bottom hint with blinking dot
+    // Bottom hint with blinking dot, two-line if room
     _bodyCanvas.setFont(&fonts::Font0);
     _bodyCanvas.setTextColor(kStatusDim, kBg);
-    String hint = "type to begin  /  esc for menu";
-    int hw = _bodyCanvas.textWidth(hint.c_str());
-    _bodyCanvas.setCursor((kScreenW - hw) / 2, bodyHeight() - 12);
-    _bodyCanvas.print(hint);
+    String hint1 = "type to begin  /  esc for menu";
+    int hw1 = _bodyCanvas.textWidth(hint1.c_str());
+    _bodyCanvas.setCursor((kScreenW - hw1) / 2, bodyHeight() - 22);
+    _bodyCanvas.print(hint1);
+    String hint2 = "try /demo to preview formatting";
+    _bodyCanvas.setTextColor(0x4208, kBg);
+    int hw2 = _bodyCanvas.textWidth(hint2.c_str());
+    _bodyCanvas.setCursor((kScreenW - hw2) / 2, bodyHeight() - 11);
+    _bodyCanvas.print(hint2);
     if ((_animPhase / 6) % 2 == 0) {
-        _bodyCanvas.fillRect((kScreenW - hw) / 2 - 8, bodyHeight() - 10, 3, 3, kStatusAccent);
+        _bodyCanvas.fillRect((kScreenW - hw1) / 2 - 8, bodyHeight() - 20, 3, 3, kStatusAccent);
     }
-    // Restore default font
     _bodyCanvas.setFont(&fonts::Font2);
     _bodyCanvas.setTextSize(1);
 }
 
-void ChatScreen::buildLines(std::vector<Line>& out) {
+void ChatScreen::buildLines(std::vector<Line>&) {
+    // Legacy signature; the styled renderer replaces this. Keep the
+    // empty implementation so the header doesn't need to change.
+}
+
+void ChatScreen::renderChatBody() {
+    // Build full list of styled lines for the whole conversation.
     const int maxPx = kScreenW - 2 * kPadX;
+    std::vector<styled_text::Line> lines;
+    lines.reserve(_conv.size() * 4);
+
     const auto& msgs = _conv.getMessages();
     for (size_t i = 0; i < msgs.size(); i++) {
         const auto& m = msgs[i];
         if (m.role == ESPAI::Role::System) continue;
-        uint16_t color = (m.role == ESPAI::Role::User) ? kUserColor : kAsstColor;
-        bool right     = (m.role == ESPAI::Role::User);
-        wrapIntoCanvas(m.content, maxPx, color, right, out);
-        if (i + 1 < msgs.size()) out.push_back({String(""), 0, false});
+        bool isUser    = (m.role == ESPAI::Role::User);
+        uint16_t color = isUser ? kUserColor : kAsstColor;
+        // User turns plain; assistant turns get full styled-text parse.
+        styled_text::parse(_bodyCanvas, m.content, color, isUser, isUser,
+                           maxPx, kScreenW, lines);
+        if (i + 1 < msgs.size()) {
+            styled_text::Line gap;
+            lines.push_back(gap);  // blank line as turn separator
+        }
     }
-}
 
-void ChatScreen::renderChatBody() {
-    std::vector<Line> lines;
-    lines.reserve(_conv.size() * 3);
-    buildLines(lines);
-
-    const int lh   = lineHeight();
-    const int vis  = visibleLines();
-    const int tot  = (int)lines.size();
-    int endIdx     = tot - _scrollOffset;
+    const int lh = lineHeight();
+    const int vis = visibleLines();
+    const int tot = (int)lines.size();
+    int endIdx = tot - _scrollOffset;
     if (endIdx < 1) endIdx = std::min(1, tot);
-    int startIdx   = endIdx - vis;
+    int startIdx = endIdx - vis;
     if (startIdx < 0) startIdx = 0;
 
     int y = 2;
     for (int i = startIdx; i < endIdx && i < tot; i++) {
-        const auto& ln = lines[i];
-        if (ln.text.length() == 0) { y += lh; continue; }
-        _bodyCanvas.setTextColor(ln.color, kBg);
-        int x = kPadX;
-        if (ln.rightAlign) {
-            int w = _bodyCanvas.textWidth(ln.text.c_str());
-            x = kScreenW - kPadX - w;
-            if (x < kPadX) x = kPadX;
-        }
-        _bodyCanvas.setCursor(x, y);
-        _bodyCanvas.print(ln.text);
+        styled_text::render(_bodyCanvas, lines[i], y, lh, kScreenW,
+                            kAsstColor, kStatusDim, kUserColor, kBg);
         y += lh;
     }
 }
@@ -869,35 +904,10 @@ void ChatScreen::renderCursorOnly() {
     }
 }
 
-void ChatScreen::wrapIntoCanvas(const String& s, int maxPx, uint16_t color,
-                                bool right, std::vector<Line>& out) {
-    const int n = (int)s.length();
-    if (n == 0) { out.push_back({String(""), color, right}); return; }
-    int i = 0;
-    while (i < n) {
-        int j = i;
-        int lastBreak = -1;
-        while (j < n) {
-            char c = s.charAt(j);
-            if (c == '\n') { lastBreak = j; j++; break; }
-            String probe = s.substring(i, j + 1);
-            if (_bodyCanvas.textWidth(probe.c_str()) > maxPx) break;
-            if (c == ' ') lastBreak = j;
-            j++;
-        }
-        int end = j;
-        if (end < n && s.charAt(end) != '\n') {
-            if (lastBreak > i) end = lastBreak;
-        }
-        if (end <= i) end = i + 1;
-        String line = s.substring(i, end);
-        while (line.length() > 0 && line.charAt(line.length() - 1) == ' ') {
-            line.remove(line.length() - 1);
-        }
-        out.push_back({line, color, right});
-        i = end;
-        while (i < n && (s.charAt(i) == ' ' || s.charAt(i) == '\n')) i++;
-    }
+void ChatScreen::wrapIntoCanvas(const String&, int, uint16_t,
+                                bool, std::vector<Line>&) {
+    // Unused now that styled_text handles wrap + parse. Definition kept to
+    // match the header without forcing a separate refactor.
 }
 
 static String kvFmt(const char* k, const String& v) {
