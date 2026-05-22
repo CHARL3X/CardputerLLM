@@ -54,12 +54,53 @@ Power switch OFF, hold G0, plug USB-C, release G0.
 - That USB CDC enumerates and shows up as a serial device immediately
   on Phase 1 boot (the `DARDUINO_USB_CDC_ON_BOOT=1` flag should ensure it).
 
-### To verify on hardware (deferred to later phases)
+## Phase 2: ESPAI proof against OpenRouter
+
+### Decisions
+
+- Provider: `OpenAICompatibleProvider` pointed at
+  `https://openrouter.ai/api/v1/chat/completions` with `openai/gpt-4o-mini`
+  as the test model. Slugs are finalized in Phase 7.
+- Credentials: `include/secrets.h` (gitignored) with `WIFI_SSID`,
+  `WIFI_PASSWORD`, `OPENROUTER_API_KEY`. `include/secrets.h.example` is
+  committed as the template.
+- Phase 2 main.cpp does NOT enable the M5Cardputer keyboard. Pure
+  network-and-display proof. Saves a tiny amount of code and isolates the
+  variable under test.
+- Test sequence: BasicChat then StreamingChat. Both print full response,
+  token counts, timing, and any error code to USB serial; tokens also
+  stream to the display body so we can confirm both paths visually.
+- Flash usage 454kB total. Small because the ESP32-S3 WiFi/BT firmware
+  lives in chip ROM; we only need the thin Arduino wrapper.
+
+### To verify on hardware
+
+- WiFi associates with the user's network at 2.4 GHz. The Cardputer ADV
+  has no 5 GHz radio.
+- TLS handshake to `openrouter.ai` succeeds. If it fails with cert errors,
+  ESPAI's bundled root CA bundle is either missing the right one or has
+  stale roots. Workarounds: `setInsecure()` for the test, or add a fresh
+  ISRG Root X1 cert. Document the path taken in this file.
+- `chat()` returns non-empty content with `success=true`.
+- `chatStream()` invokes the callback multiple times with `done=false`
+  followed by exactly one `done=true`. Time to first token under 3s on a
+  decent network is expected; longer is a red flag.
+- No heap exhaustion mid-stream. The ESP32-S3FN8 has no PSRAM; if we OOM
+  during streaming we'll need to either chunk-process tokens immediately
+  without buffering, or move to the PSRAM variant of the board.
+
+### Pivot trigger
+
+If TLS won't handshake OR `chatStream` returns false consistently OR the
+callback never fires with content: stop. Tag the commit
+`phase-2-streaming-failed`. Pivot to a hand-rolled SSE client using
+`WiFiClientSecure` and an `ArduinoJson` streaming parser. Per spec, do
+NOT silently fall back to non-streaming.
+
+## Phase 3+ deferrals
 
 - Battery percentage readout math on the ADV (1750mAh, different topology
   from original Cardputer). Launcher v2.6.5 fixed Cardputer battery ADC;
   ADV may need its own correction.
 - IR LED on GPIO 44.
 - ES8311 audio init quirks (shared I2C bus with TCA8418).
-- Whether ESPAI streams reliably over WiFi on ESP32-S3 with TLS to
-  OpenRouter (Phase 2 gate; HIGH RISK).

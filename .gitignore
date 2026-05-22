@@ -8,3 +8,6 @@
 build/
 # dist/ holds the SD-card-loadable .bin. Not committed; rebuild produces it.
 dist/
+
+# real secrets live in include/secrets.h; the .example template IS tracked.
+include/secrets.h

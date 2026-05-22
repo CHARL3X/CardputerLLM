@@ -6,8 +6,21 @@ models over a wire you control. Not a chatbot toy.
 
 ## Status
 
-Phase 1 of 9: toolchain proof. Hello on screen, keyboard echoes to USB
-serial and to the input row. No network, no LLM yet.
+Phase 2 of 9: ESPAI proof against OpenRouter. Boots, connects WiFi, fires
+one BasicChat then one StreamingChat against `openai/gpt-4o-mini`, prints
+results to USB serial and streams tokens to the display body. No chat UI
+or keyboard input yet.
+
+## Secrets
+
+Phase 2+ needs credentials. Edit `include/secrets.h` (gitignored) and
+set:
+
+    #define WIFI_SSID          "your-wifi"
+    #define WIFI_PASSWORD      "your-password"
+    #define OPENROUTER_API_KEY "sk-or-v1-..."
+
+Template lives at `include/secrets.h.example`. Do not commit real keys.
 
 ## Build
 
