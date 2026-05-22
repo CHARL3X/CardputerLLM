@@ -26,8 +26,10 @@ device, a real QWERTY, a wire out to a model under your control.
 
 ## Status
 
-Phase 8 polish cycle: chat UI is the daily driver. Onboarding works,
-formatting works, menu works, history persists across reboots.
+`v1.0` — stable. Daily-driver chat UI, on-device onboarding (WiFi scan +
+web key entry), markup dialect with markdown coexistence, model picker,
+persistent history, slash commands with fuzzy autocomplete, polished
+splash and empty-state animations.
 
 ## Hardware
 

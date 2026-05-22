@@ -91,7 +91,7 @@ void run() {
 
     // 5) Version label, dim
     M5Cardputer.Display.setTextColor(kDim, kBg);
-    const char* ver = "phase 8 . dev";
+    const char* ver = "v1.0";
     int vw = M5Cardputer.Display.textWidth(ver);
     M5Cardputer.Display.setCursor((kScreenW - vw) / 2, 108);
     M5Cardputer.Display.print(ver);

@@ -1328,7 +1328,7 @@ void ChatScreen::buildWiFiLines() {
 void ChatScreen::buildDiagnosticsLines() {
     _infoLines.clear();
     _infoLines.push_back("--- build ---");
-    _infoLines.push_back(kvFmt("version", "ph8-dev"));
+    _infoLines.push_back(kvFmt("version", "v1.0"));
     _infoLines.push_back("--- chat ---");
     _infoLines.push_back(kvFmt("model", _models[_modelIdx].label));
     _infoLines.push_back(kvFmt("depth", String(_historyDepth)));

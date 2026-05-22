@@ -424,6 +424,62 @@ which then restarts the boot log to keep visual continuity.
 
 Replays the cold-boot wordmark sequence on demand. Cheap delight.
 
+## Phase 8.6: wifi onboarding logic + ui polish
+
+### Scan-first connect
+
+Original boot tried each saved SSID with a 12 s timeout. Two saved
+networks neither in range = 24 s of boot before fallback. Fixed by
+scanning once (~2 s), intersecting with the saved list, sorting by
+visible RSSI, then trying only what's actually broadcasting.
+
+New helpers in `wifi_setup`:
+- `scanNow(showUI)` — synchronous scan, deduped, sorted by RSSI
+- `filterByVisibility(saved, visible)` — intersection, strongest first
+
+### UI polish
+
+- `boot_ui::sectionHeader()` — amber hairlines flanking the title,
+  matches in-app `<<title>>` style. Replaces solid navy header bar.
+- `boot_ui::hintBar()` — two-line dim footer with hairline separator
+- Step indicator in every screen header: `wifi . select`,
+  `wifi . password`, `wifi . connecting`, etc.
+- Scan list: 3 px amber selection bar (no `>` prefix), stair-step RSSI
+  bars (no `-65 dBm` text), filled lock square for secured networks
+- Password screen: framed input box, "for: <ssid>" subtitle, char count
+- Web form: cassette-futurism corner brackets, eyebrow label, amber
+  gradient rules, hover-lift button, proper labels, dotted-border links
+
+## Phase 8.7: fuzzy autocomplete for slash commands
+
+Popup appears just above input row when typing `/`. Fuzzy in-order
+matching against the 9 known commands; scoring rewards prefix and
+consecutive matches.
+
+Interaction:
+- `Fn+,`/`Fn+.` navigate (context-aware: scrolls chat when popup closed)
+- `Tab` completes; commands taking args get trailing space appended
+- `Enter` executes trimmed input
+- `Backspace` shrinking past the slash hides the popup
+
+Visual:
+- Thin amber hairline at popup top edge
+- 3 px amber selection bar
+- Font0 (6×8) for density, 4 rows in ~44 px
+- Command in cream/amber, description in dim warm grey at fixed column
+
+## v1.0 wrap
+
+Tagged. Splash and diagnostics now read `v1.0`. README marked stable.
+Public repo at https://github.com/CHARL3X/CardputerLLM.
+
+Outstanding (deferred to v1.1+):
+- Pixel-smooth scroll (currently jumps a line per nudge)
+- TZ-aware time (status row shows UTC)
+- Chat browser (load old `/CardputerLLM/chats/*.json` files)
+- Battery readout on the ADV (different ADC topology from original)
+- Speaker beep on stream complete (settings toggle needed first)
+
 ## Phase 3+ deferrals
 
 - Battery percentage readout math on the ADV (1750mAh, different topology
