@@ -13,13 +13,15 @@ or keyboard input yet.
 
 ## Credentials live on the SD card, not in the binary
 
-Two plain-text files at the root of the microSD:
+All app files go in a `/CardputerLLM/` folder on the microSD so the root
+stays clean for Launcher's own folders (`/downloads/`, etc).
 
-`/openrouter.txt` (one line):
+`/CardputerLLM/openrouter.txt` (one line):
 
     sk-or-v1-...
 
-`/wifi.txt` (ssid then password, one per line; pairs tried in order):
+`/CardputerLLM/wifi.txt` (ssid then password, one per line; pairs tried
+in order):
 
     MyHomeNetwork
     mypassword
@@ -27,11 +29,11 @@ Two plain-text files at the root of the microSD:
     backuppassword
 
 Lines starting with `#` are ignored. The compiled `dist/CardputerLLM.bin`
-contains no credentials; pull the chip and dump flash and you get nothing.
+contains no credentials; dump the flash and you get nothing.
 
-The `dist/sd/` folder is the local staging area for the SD card. It is
-gitignored. Copy `dist/sd/openrouter.txt`, `dist/sd/wifi.txt`, and
-`dist/CardputerLLM.bin` to the SD card; install the `.bin` via Launcher.
+`dist/sd/CardputerLLM/` is the local staging area. Gitignored. Mirror it
+onto the SD card as `/CardputerLLM/`. The `.bin` itself goes wherever
+Launcher expects (typically `/downloads/`).
 
 ## Build
 

@@ -212,7 +212,7 @@ void setup() {
 
     String apiKey = sdcfg::loadOpenRouterKey();
     if (apiKey.length() == 0) {
-        halt("missing /openrouter.txt", "put key on sd");
+        halt("missing /CardputerLLM/openrouter.txt", "put key on sd");
     }
     if (!apiKey.startsWith("sk-or-")) {
         Serial.println("[sd] warn: api key does not start with sk-or-");
@@ -220,7 +220,7 @@ void setup() {
 
     auto creds = sdcfg::loadWiFi();
     if (creds.empty()) {
-        halt("missing /wifi.txt", "put ssid+pw pairs on sd");
+        halt("missing /CardputerLLM/wifi.txt", "put ssid+pw pairs on sd");
     }
     Serial.printf("[sd] %u wifi candidates loaded\n", (unsigned)creds.size());
 

@@ -38,7 +38,7 @@ bool begin() {
 }
 
 String loadOpenRouterKey() {
-    String raw = readFileWhole("/openrouter.txt");
+    String raw = readFileWhole("/CardputerLLM/openrouter.txt");
     // Take just the first non-blank line, in case the file has trailing junk.
     int nl = raw.indexOf('\n');
     String first = (nl >= 0) ? raw.substring(0, nl) : raw;
@@ -47,7 +47,7 @@ String loadOpenRouterKey() {
 
 std::vector<WiFiCred> loadWiFi() {
     std::vector<WiFiCred> out;
-    String raw = readFileWhole("/wifi.txt");
+    String raw = readFileWhole("/CardputerLLM/wifi.txt");
     if (raw.length() == 0) return out;
 
     std::vector<String> lines;
