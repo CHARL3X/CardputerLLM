@@ -1,0 +1,185 @@
+// Copied verbatim from CardputerLLM/src/ui/boot_ui.cpp.
+#include "boot_ui.h"
+#include <M5Cardputer.h>
+
+namespace {
+constexpr int kScreenW = 240;
+constexpr int kScreenH = 135;
+constexpr int kHeaderH = 14;
+constexpr int kFooterH = 14;
+} // namespace
+
+namespace boot_ui {
+
+void clear() {
+    M5Cardputer.Display.fillScreen(TFT_BLACK);
+}
+
+void header(const String& msg, uint16_t bg) {
+    M5Cardputer.Display.fillRect(0, 0, kScreenW, kHeaderH, bg);
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(TFT_WHITE, bg);
+    M5Cardputer.Display.setCursor(4, 1);
+    M5Cardputer.Display.print(msg);
+}
+
+void footer(const String& msg, uint16_t bg) {
+    M5Cardputer.Display.fillRect(0, kScreenH - kFooterH, kScreenW, kFooterH, bg);
+    M5Cardputer.Display.setFont(&fonts::Font0);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(TFT_BLACK, bg);
+    M5Cardputer.Display.setCursor(4, kScreenH - kFooterH + 3);
+    M5Cardputer.Display.print(msg);
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+}
+
+void centerText(const String& msg, int y, uint16_t color) {
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    int w = M5Cardputer.Display.textWidth(msg.c_str());
+    M5Cardputer.Display.setTextColor(color, TFT_BLACK);
+    M5Cardputer.Display.setCursor((kScreenW - w) / 2, y);
+    M5Cardputer.Display.print(msg);
+}
+
+void leftText(const String& msg, int y, uint16_t color) {
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(color, TFT_BLACK);
+    M5Cardputer.Display.setCursor(4, y);
+    M5Cardputer.Display.print(msg);
+}
+
+namespace { int g_logY = 0; }
+
+void startLog() {
+    M5Cardputer.Display.fillScreen(TFT_BLACK);
+    constexpr uint16_t kAccent = 0xFD60;
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(kAccent, TFT_BLACK);
+    int midY = 8;
+    int leftEnd = 6 + 10;
+    M5Cardputer.Display.drawLine(6, midY, leftEnd, midY, kAccent);
+    M5Cardputer.Display.setCursor(leftEnd + 4, 1);
+    M5Cardputer.Display.print("BOOT");
+    int tw = M5Cardputer.Display.textWidth("BOOT");
+    int rightStart = leftEnd + 4 + tw + 4;
+    M5Cardputer.Display.drawLine(rightStart, midY, 240 - 6, midY, kAccent);
+    g_logY = 22;
+}
+
+void step(const String& label, bool ok, const String& detail) {
+    constexpr uint16_t kOk    = 0x4FCA;
+    constexpr uint16_t kErr   = 0xF884;
+    constexpr uint16_t kIdle  = 0xEF7D;
+    constexpr uint16_t kDim   = 0x4208;
+    constexpr int padX = 6;
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    int y = g_logY;
+    int lh = M5Cardputer.Display.fontHeight() + 2;
+
+    M5Cardputer.Display.setTextColor(kIdle, TFT_BLACK);
+    M5Cardputer.Display.setCursor(padX, y);
+    M5Cardputer.Display.print(label);
+    int labelEnd = M5Cardputer.Display.getCursorX();
+
+    const char* statusText = ok ? "[ok]" : "[!!]";
+    int statusW = M5Cardputer.Display.textWidth(statusText);
+    int statusX = 240 - padX - statusW;
+
+    int leaderStart = labelEnd + 4;
+    int leaderEnd = statusX - 4;
+    int dotY = y + lh - 6;
+    for (int x = leaderStart; x < leaderEnd; x += 4) {
+        M5Cardputer.Display.fillRect(x, dotY, 2, 2, kDim);
+    }
+
+    M5Cardputer.Display.setTextColor(ok ? kOk : kErr, TFT_BLACK);
+    M5Cardputer.Display.setCursor(statusX, y);
+    M5Cardputer.Display.print(statusText);
+
+    if (detail.length() > 0) {
+        g_logY += lh;
+        M5Cardputer.Display.setFont(&fonts::Font0);
+        M5Cardputer.Display.setTextColor(kDim, TFT_BLACK);
+        M5Cardputer.Display.setCursor(padX + 8, g_logY + 2);
+        M5Cardputer.Display.print(detail);
+        M5Cardputer.Display.setFont(&fonts::Font2);
+        g_logY += 10;
+    } else {
+        g_logY += lh;
+    }
+    delay(110);
+}
+
+void finishLog() {
+    constexpr uint16_t kAccent = 0xFD60;
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(kAccent, TFT_BLACK);
+    String r = "ready.";
+    int w = M5Cardputer.Display.textWidth(r.c_str());
+    int y = g_logY + 4;
+    M5Cardputer.Display.setCursor((240 - w) / 2, y);
+    M5Cardputer.Display.print(r);
+    delay(380);
+}
+
+void sectionHeader(const String& title, uint16_t accent) {
+    constexpr int kPad = 6;
+    constexpr int kH   = 16;
+    M5Cardputer.Display.fillRect(0, 0, 240, kH, TFT_BLACK);
+    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(accent, TFT_BLACK);
+    int midY    = kH / 2;
+    int leftEnd = kPad + 10;
+    M5Cardputer.Display.drawLine(kPad, midY, leftEnd, midY, accent);
+    M5Cardputer.Display.setCursor(leftEnd + 4, 1);
+    M5Cardputer.Display.print(title);
+    int tw = M5Cardputer.Display.textWidth(title.c_str());
+    int rightStart = leftEnd + 4 + tw + 4;
+    M5Cardputer.Display.drawLine(rightStart, midY, 240 - kPad, midY, accent);
+}
+
+void hintBar(const String& line1, const String& line2) {
+    constexpr int kH = 22;
+    constexpr int kPad = 4;
+    constexpr uint16_t kDiv = 0x2104;
+    constexpr uint16_t kDim = 0x6B4D;
+    int y = 135 - kH;
+    M5Cardputer.Display.fillRect(0, y, 240, kH, TFT_BLACK);
+    M5Cardputer.Display.drawLine(0, y, 240, y, kDiv);
+    M5Cardputer.Display.setFont(&fonts::Font0);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(kDim, TFT_BLACK);
+    M5Cardputer.Display.setCursor(kPad, y + 4);
+    M5Cardputer.Display.print(line1);
+    if (line2.length() > 0) {
+        M5Cardputer.Display.setCursor(kPad, y + 13);
+        M5Cardputer.Display.print(line2);
+    }
+    M5Cardputer.Display.setFont(&fonts::Font2);
+}
+
+void waitForAnyKey() {
+    while (true) {
+        M5Cardputer.update();
+        if (!M5Cardputer.Keyboard.isPressed()) break;
+        delay(15);
+    }
+    while (true) {
+        M5Cardputer.update();
+        if (M5Cardputer.Keyboard.isPressed()) {
+            while (M5Cardputer.Keyboard.isPressed()) { M5Cardputer.update(); delay(10); }
+            return;
+        }
+        delay(15);
+    }
+}
+
+} // namespace boot_ui
