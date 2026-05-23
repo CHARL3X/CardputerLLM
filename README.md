@@ -1,191 +1,124 @@
-# Verbatim
+# Cardputer
 
-Voice-native note capture and retrieval for the M5Stack Cardputer ADV.
-Press space, talk, get a transcript. Select notes, ask follow-up
-questions with them as context. Everything lives on the SD card.
+Two pocket terminals fused into one firmware. Boot, get a sleek splash,
+pick a mode — **CardputerLLM** (chat with any LLM) or **Verbatim**
+(voice notes + ask). One binary, one set of credentials, one SD card.
 
 ```
-       V E R B A T I M
-            VOX . LOG
+       C A R D P U T E R
+        L L M . V O X
     ─── v1.0 ─────────────
 ```
 
 ## What it is
 
-- **Capture.** Press space from the home screen. Record up to 5
-  minutes of speech. Press any key to stop. The device sends the
-  WAV to OpenRouter's transcription endpoint, asks a fast chat
-  model for a 3–6-word title, persists the result as a timestamped
-  markdown file at `/Verbatim/notes/`, and deletes the WAV.
-- **Browse.** The home screen IS the notes list. Newest first.
-  Title, date, duration per row. Highlight a row and hit Enter to
-  read it. Fn+D to delete. Fn+R later in v1.1+.
-- **Ask.** Fn+S to toggle multi-select. Space toggles each row.
-  Fn+A → token preflight → chat against the selected memos as
-  context. Same trio of models as CardputerLLM (GPT-5,
-  Claude Sonnet 4.5, Gemini 2.5 Pro). Single-session; exiting
-  ask wipes the conversation but not the notes.
-- **Menu.** Backtick/tilde opens the settings menu. Diagnostics,
-  WiFi info, system-prompt info, "add wifi" (rerun the WiFi
-  picker), "set api key" (rerun the web form), "exit."
+- **One firmware**, two apps. Splash plays the chime, then the mode
+  picker lets you choose CardputerLLM or Verbatim. Reboot to switch;
+  the picker defaults to whichever mode you ran last.
+- **Shared onboarding.** WiFi setup + OpenRouter API key live at
+  `/Cardputer/wifi.txt` and `/Cardputer/openrouter.txt`. Set them
+  once and both modes use them.
+- **Co-resident data.** LLM chats live under `/Cardputer/chats/`,
+  Verbatim notes under `/Cardputer/notes/`, screenshots under
+  `/Cardputer/snaps/`.
 
-Sibling firmware to [CardputerLLM](https://github.com/CHARL3X/CardputerLLM)
-with the same cassette-futurism aesthetic, the same boot patterns,
-and the same on-device WiFi + API-key onboarding. They live in
-separate SD namespaces (`/Verbatim/` vs `/CardputerLLM/`) and NVS
-namespaces (`verbatim` vs `cardputerllm`); neither knows the other
-exists.
+Merges the two standalone apps in this repo: CardputerLLM and
+Verbatim. Their full design intent and history are preserved in
+their individual repos; this firmware is the union.
 
 ## Status
 
-`v1.0` — capture → name → save → browse → ask loop is complete and
-verified end-to-end on hardware. Six phases (scaffold, audio,
-transcribe, title+persist, list/detail, ask). See `NOTES.md` for the
-running build log including every codec gotcha, TLS stack overflow,
-and gain calibration finding along the way.
+`v1.0-merged` — every Phase from both prior apps is included. See
+`NOTES.md` for the merge log + everything new.
 
 ## Hardware
 
-- M5Stack Cardputer ADV (ESP32-S3FN8 via Stamp-S3A, 8 MB flash, **no PSRAM**)
+- M5Stack Cardputer ADV (ESP32-S3FN8, 8 MB flash, **no PSRAM**)
 - 1.14" ST7789V2 IPS, 240×135
 - 56-key QWERTY, TCA8418 I²C scanner
-- **ES8311 audio codec + MEMS mic** — this is the new hardware vs
-  the original Cardputer
-- microSD for notes + credentials
+- ES8311 audio codec + MEMS mic
+- microSD for credentials + notes + chats
 - Runs as a Launcher app via [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher)
 
 ## Build
 
-Requires PlatformIO. From this directory:
+```
+pio run
+```
 
-    pio run
+Output: `dist/Cardputer.bin`.
 
-Output: `dist/Verbatim.bin` (the app-only binary that Launcher loads).
+## Deploy
 
-## Deploy (via Launcher)
+Copy `dist/Cardputer.bin` to `/apps/Cardputer.bin` on your microSD and
+install via Launcher's `SD` menu.
 
-Copy `dist/Verbatim.bin` to `/apps/Verbatim.bin` on your microSD,
-insert, and install via Launcher's `SD` menu.
+For direct USB flash (overwrites Launcher):
 
-For direct USB flash (dev only, overwrites Launcher):
-
-    pio run -t upload
+```
+pio run -t upload
+```
 
 Power switch OFF, hold G0, plug USB-C, release G0 first.
 
-## First boot (no SD prep)
+## First boot
 
-Same flow as CardputerLLM:
+If `/Cardputer/wifi.txt` and `/Cardputer/openrouter.txt` are empty:
 
-1. **WiFi:** scan list, pick, type password on the Cardputer, Enter.
-2. **API key:** the device shows `http://<ip>`. Open it on your
-   phone or laptop and paste your OpenRouter key.
+1. **WiFi**: scan list, pick, type password, Enter.
+2. **API key**: device shows `http://<ip>` — open it on your phone /
+   laptop and paste your OpenRouter key.
+3. **Welcome screen** (one-shot per device).
+4. **Mode picker** — pick CardputerLLM or Verbatim and launch.
 
-Both creds end up on the SD at `/Verbatim/wifi.txt` and
-`/Verbatim/openrouter.txt`. Subsequent boots are silent.
-
-You can also rerun either flow later from the in-app menu (backtick
-or tilde key → "add wifi" / "set api key").
+Subsequent boots go straight to splash → mode picker. The picker
+defaults the highlight to whatever you ran last.
 
 ## In the app
 
-### Home / notes list
+### Mode picker
 
 | Key | Action |
 |---|---|
-| Space | Record a new note |
-| `,` / `;` / Fn+`,` | Move highlight up |
-| `.` / `/` / Fn+`.` | Move highlight down |
-| Enter | Open highlighted note |
-| Fn+D | Delete highlighted note (with confirm) |
-| Fn+S | Enter multi-select |
-| Fn+A | Ask mode with highlighted (or selected) notes |
-| `` ` `` / `~` | Open the settings menu |
+| `,` / `;` | Highlight up (CardputerLLM) |
+| `.` / `/` | Highlight down (Verbatim) |
+| `1` / `2` | Jump directly |
+| Enter | Launch the highlighted mode |
 
-### Multi-select mode
+### CardputerLLM mode
 
-| Key | Action |
-|---|---|
-| Space | Toggle selection on highlighted row |
-| Arrows | Move highlight |
-| Enter | Open highlighted |
-| Fn+A | Ask with current selection |
-| Fn+S | Exit multi-select |
-| Backspace | Exit multi-select |
+Full chat terminal with the trio (GPT-5 / Sonnet 4.5 / Gemini 2.5
+Pro), slash commands, model picker, history persistence under
+`/Cardputer/chats/`. See the [CardputerLLM repo](https://github.com/CHARL3X/CardputerLLM)
+for the full keymap.
 
-### Note detail
+### Verbatim mode
 
-| Key | Action |
-|---|---|
-| Fn+`,` / Fn+`.` | Scroll up / down |
-| Fn+D | Delete this note (with confirm) |
-| Backspace | Back to list |
-
-### Ask mode
-
-| Key | Action |
-|---|---|
-| Type + Enter | Send to model |
-| Fn+M | Open model picker |
-| Fn+`,` / Fn+`.` | Scroll conversation |
-| `` ` `` / `~` / Backspace during stream | Cancel |
-| Backspace from empty input | Exit ask, return to list |
-
-Slash commands in ask: `/help`, `/clear`, `/diag`, `/snap`.
-
-### Menu (backtick / tilde from home)
-
-`diagnostics`, `wifi info`, `system prompt`, `add wifi`, `set api key`, `exit`.
+Voice notes + ask mode. Press SPC to record. Transcripts get titled
+by Gemini Flash and saved to `/Cardputer/notes/<ts>-<slug>.md` as
+YAML-frontmatter markdown. Multi-select notes (Fn+S → SPC per row)
+and Fn+A to ask follow-up questions with them as context.
 
 ## SD card layout
 
 ```
-/Verbatim/
-  openrouter.txt        single line, your OpenRouter API key
-  wifi.txt              ssid + password pairs, line per
-  system.txt            optional ask-mode persona override
-  notes/
-    20260523T143211Z-cardputer-firmware-ideas.md
-    ...
-  snaps/                BMP screenshots from /snap
-  .recording.wav        transient during capture (deleted after save)
+/Cardputer/
+  openrouter.txt           single line, OpenRouter API key
+  wifi.txt                 ssid + password line pairs
+  system.txt               optional shared system prompt override
+  chats/                   LLM chat sessions (.json)
+  notes/                   Verbatim transcripts (.md)
+  snaps/                   BMP screenshots
 ```
 
-Each note `.md` is YAML frontmatter + transcript body:
+## NVS
 
-```
----
-created: 2026-05-23T14:32:11Z
-title: Cardputer firmware ideas
-duration_sec: 47
-model_transcribe: openai/whisper-large-v3
-model_title: google/gemini-2.5-flash
----
-
-Hey, so I've been thinking about ...
-```
-
-The body is plain prose; no inline tags. Frontmatter is read by the
-list view and the ask-mode context builder.
-
-## Defaults
-
-- Transcription: `openai/whisper-large-v3`
-- Title generation: `google/gemini-2.5-flash`
-- Ask mode (in-session pickable): `openai/gpt-5`,
-  `anthropic/claude-sonnet-4.5` (default), `google/gemini-2.5-pro`
-
-Transcription + title models persist via NVS (`verbatim` namespace,
-keys `tx_model` / `title_model`). Ask-mode model is in-session only.
-
-## Security note
-
-The API-key web form runs HTTP on port 80 with no auth. It listens
-only while no key is present (boot) or during an explicit "set api
-key" invocation from the menu. Do the initial setup on a network
-you trust.
-
-The compiled binary contains zero credentials.
+Namespace `cardputer`. Shared keys (`welcomed`, `bootsound`,
+`last_mode`) plus per-mode keys (`histdepth` for LLM, `askdepth` +
+`tx_model` + `title_model` for Verbatim). Independent of the
+`cardputerllm` and `verbatim` namespaces used by the standalone
+builds, so flashing this firmware on a device that previously ran
+either standalone app starts fresh.
 
 ## License
 
