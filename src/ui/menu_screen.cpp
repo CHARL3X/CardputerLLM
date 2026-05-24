@@ -23,9 +23,9 @@ constexpr int kPadX    = 4;
 constexpr uint16_t kBg           = 0x0000;
 constexpr uint16_t kDivider      = 0x2104;
 constexpr uint16_t kStatusDim    = 0x6B4D;
-constexpr uint16_t kStatusAccent = 0x57DC;
+constexpr uint16_t kStatusAccent = 0x07FF;
 constexpr uint16_t kIdle         = 0xEF7D;
-constexpr uint16_t kAccent       = 0x57DC;
+constexpr uint16_t kAccent       = 0x07FF;
 constexpr uint16_t kDim          = 0x6B4D;
 
 enum class Mode { List, Info };

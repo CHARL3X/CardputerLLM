@@ -30,13 +30,13 @@ constexpr int kLinePad = 2;
 constexpr uint16_t kBg          = 0x0000;
 constexpr uint16_t kDivider     = 0x2104;
 constexpr uint16_t kUserColor   = 0xEF7D;
-constexpr uint16_t kAsstColor   = 0x57DC;
+constexpr uint16_t kAsstColor   = 0x07FF;
 constexpr uint16_t kInputColor  = 0xEF7D;
-constexpr uint16_t kCursorColor = 0x57DC;
+constexpr uint16_t kCursorColor = 0x07FF;
 constexpr uint16_t kStreamHint  = 0x83C0;
 constexpr uint16_t kStatusDim   = 0x6B4D;
-constexpr uint16_t kStatusAccent= 0x57DC;
-constexpr uint16_t kSelColor    = 0x57DC;
+constexpr uint16_t kStatusAccent= 0x07FF;
+constexpr uint16_t kSelColor    = 0x07FF;
 constexpr uint16_t kIdleColor   = 0xEF7D;
 constexpr uint16_t kDim         = 0x6B4D;
 

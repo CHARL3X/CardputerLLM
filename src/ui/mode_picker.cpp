@@ -37,8 +37,8 @@ constexpr uint16_t kFaint  = 0x4208;
 // goes mint/teal to feel like a different tool.
 constexpr uint16_t kLlmAccent     = 0xFD60;  // amber
 constexpr uint16_t kLlmAccentDim  = 0x3940;  // amber at ~1/4 brightness (card tint)
-constexpr uint16_t kVoxAccent     = 0x57DC;  // soft teal-mint
-constexpr uint16_t kVoxAccentDim  = 0x11E7;  // mint at ~1/4 brightness
+constexpr uint16_t kVoxAccent     = 0x07FF;  // pure cyan -- CRT phosphor vibe
+constexpr uint16_t kVoxAccentDim  = 0x01FF;  // cyan at low brightness
 
 struct Option {
     const char*       title;
@@ -50,9 +50,9 @@ struct Option {
 
 const Option kOptions[2] = {
     { "CardputerLLM", "chat with any LLM",
-      kLlmAccent, kLlmAccentDim, &fonts::FreeSansBold12pt7b },
+      kLlmAccent, kLlmAccentDim, &fonts::FreeSansBold9pt7b },
     { "Verbatim",     "voice notes + ask",
-      kVoxAccent, kVoxAccentDim, &fonts::FreeSerifBoldItalic12pt7b },
+      kVoxAccent, kVoxAccentDim, &fonts::FreeSerifBoldItalic9pt7b },
 };
 
 void renderStatus() {
@@ -90,14 +90,20 @@ void renderHint() {
     M5Cardputer.Display.setFont(&fonts::Font2);
 }
 
-// Card layout inside the body region (101 px tall):
-//   y=4   -> top of card 0 (LLM)
-//   y=48  -> top of card 1 (Verbatim)
-//   each card is 44 px tall, 4 px gaps top/middle/bottom
+// Card layout inside the body region (101 px tall).
+//
+// FreeFonts 9pt7b have ~13 px cap height above baseline + ~5 px italic
+// descent below baseline = ~18 px visible vertical run. Plus a Font0
+// (8 px) subtitle and padding, a 42 px card holds it all without
+// collision.
+//
+//   y=4  -> card 0 (LLM)
+//   y=51 -> card 1 (Verbatim)
+//   top/middle/bottom gaps 4/5/4 around two 42 px cards = 101 px exactly
 constexpr int kCard0Y = 4;
-constexpr int kCard1Y = 52;
-constexpr int kCardH  = 44;
-constexpr int kCardX  = 6;
+constexpr int kCard1Y = 51;
+constexpr int kCardH  = 42;
+constexpr int kCardX  = 8;
 constexpr int kCardW  = kScreenW - 2 * kCardX;
 
 void renderCard(M5Canvas& c, int idx, bool active, uint32_t animPhase) {
@@ -106,34 +112,35 @@ void renderCard(M5Canvas& c, int idx, bool active, uint32_t animPhase) {
 
     uint16_t borderColor = active ? opt.accent : kFaint;
 
-    // Faint mode-tinted background fill on the active card. Subtle --
-    // ~1/4 brightness so it reads as "highlighted" not "blasting."
     if (active) {
-        c.fillRoundRect(kCardX, y, kCardW, kCardH, 6, opt.accentDim);
+        c.fillRoundRect(kCardX, y, kCardW, kCardH, 5, opt.accentDim);
     }
-    c.drawRoundRect(kCardX, y, kCardW, kCardH, 6, borderColor);
+    c.drawRoundRect(kCardX, y, kCardW, kCardH, 5, borderColor);
     if (active) {
-        // Double-stroke the inactive-row outline for a slight glow
-        c.drawRoundRect(kCardX + 1, y + 1, kCardW - 2, kCardH - 2, 5,
+        c.drawRoundRect(kCardX + 1, y + 1, kCardW - 2, kCardH - 2, 4,
                         opt.accent);
     }
 
-    // Title in mode font + mode color
+    // Title: M5GFX places setCursor(x, y) at the BASELINE for GFX
+    // fonts. 9pt7b cap height ~13, italic descent ~5. We want the cap
+    // top to sit ~6 px below the card top, so baseline = y + 6 + 13 = y + 19.
+    // Descender bottoms out at y + 19 + 5 = y + 24.
     c.setFont(opt.titleFont);
     c.setTextSize(1);
     c.setTextColor(active ? opt.accent : kDim, active ? opt.accentDim : kBg);
-    int titleBaseline = y + 22;
-    c.setCursor(kCardX + 10, titleBaseline);
+    c.setCursor(kCardX + 10, y + 19);
     c.print(opt.title);
 
-    // Description in Font0 underneath
+    // Subtitle: Font0 cursor places TOP-LEFT (bitmap font convention),
+    // 8 px tall. Sitting at y + 28 leaves a 4 px gap above the title's
+    // descenders and a 6 px gap below for the card bottom.
     c.setFont(&fonts::Font0);
     c.setTextSize(1);
     c.setTextColor(active ? kIdle : kDim, active ? opt.accentDim : kBg);
-    c.setCursor(kCardX + 10, y + kCardH - 12);
+    c.setCursor(kCardX + 10, y + 28);
     c.print(opt.desc);
 
-    // Active card: pulsing chevron at the right edge
+    // Active card: pulsing chevron, centered vertically.
     if (active) {
         int chevX = kCardX + kCardW - 14;
         int chevY = y + kCardH / 2 - 5;
