@@ -948,10 +948,13 @@ void ChatScreen::renderStatus() {
         M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
         M5Cardputer.Display.print(hint);
     } else {
-        // Tiny LED-style dot in the corner when idle in chat.
-        M5Cardputer.Display.fillRect(kPadX, 4, 3, 3, kStatusAccent);
+        // Persistent LLM brand badge -- always visible so the user
+        // knows which mode they're in.
+        M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
+        M5Cardputer.Display.setCursor(kPadX, 2);
+        M5Cardputer.Display.print("LLM");
 
-        // WiFi signal bars: 4 stair-stepped verticals just right of the LED.
+        // WiFi signal bars sit just right of the brand badge.
         if (WiFi.status() == WL_CONNECTED) {
             int rssi = WiFi.RSSI();
             int bars = 0;
@@ -959,7 +962,7 @@ void ChatScreen::renderStatus() {
             if (rssi > -75) bars = 2;
             if (rssi > -65) bars = 3;
             if (rssi > -55) bars = 4;
-            int baseX = kPadX + 8;
+            int baseX = kPadX + 24;
             int baseY = 9; // bottom of bars
             for (int b = 0; b < 4; b++) {
                 int h = 2 + b;

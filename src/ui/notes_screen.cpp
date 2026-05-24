@@ -22,9 +22,9 @@ constexpr int kPadX    = 4;
 constexpr uint16_t kBg           = 0x0000;
 constexpr uint16_t kDivider      = 0x2104;
 constexpr uint16_t kStatusDim    = 0x6B4D;
-constexpr uint16_t kStatusAccent = 0xFD60;
+constexpr uint16_t kStatusAccent = 0x57DC;
 constexpr uint16_t kIdle         = 0xEF7D;
-constexpr uint16_t kAccent       = 0xFD60;
+constexpr uint16_t kAccent       = 0x57DC;
 constexpr uint16_t kFaint        = 0x2104;
 constexpr uint16_t kMuted        = 0x4208;
 constexpr uint16_t kRed          = 0xF884;
@@ -438,8 +438,13 @@ void NotesScreen::renderStatus() {
     M5Cardputer.Display.setCursor(rx, 2);
     M5Cardputer.Display.print(right);
 
-    // LED dot + RSSI bars on the left
-    M5Cardputer.Display.fillRect(kPadX, 4, 3, 3, kStatusAccent);
+    // Persistent VOX brand badge -- always visible so the user knows
+    // they're in Verbatim mode (vs the LLM chat).
+    M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
+    M5Cardputer.Display.setCursor(kPadX, 2);
+    M5Cardputer.Display.print("VOX");
+
+    // WiFi signal bars to the right of the brand badge.
     if (WiFi.status() == WL_CONNECTED) {
         int rssi = WiFi.RSSI();
         int bars = 0;
@@ -447,7 +452,7 @@ void NotesScreen::renderStatus() {
         if (rssi > -75) bars = 2;
         if (rssi > -65) bars = 3;
         if (rssi > -55) bars = 4;
-        int baseX = kPadX + 8;
+        int baseX = kPadX + 24;
         int baseY = 9;
         for (int b = 0; b < 4; b++) {
             int h = 2 + b;
