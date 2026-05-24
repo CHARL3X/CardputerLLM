@@ -75,6 +75,27 @@ constexpr uint8_t kMicMagnify   = 32;    // M5Unified default is 16
 constexpr int    kWarmupBlocks  = 10;   // 10 * 32 ms = ~320 ms
 constexpr uint32_t kSettleMs    = 150;  // brief analog-settle after PGA write
 
+// Editorial section header in the FreeSerifBoldItalic9pt7b serif --
+// same flanking-hairlines pattern as boot_ui::sectionHeader, but with
+// Verbatim's launcher-card typography for visual continuity.
+void editorialHeader(const char* title, uint16_t color) {
+    constexpr int kPad = 6;
+    constexpr int kH   = 18;
+    M5Cardputer.Display.fillRect(0, 0, kScreenW, kH, kBg);
+    M5Cardputer.Display.setTextSize(1);
+    int midY    = kH / 2;
+    int leftEnd = kPad + 10;
+    M5Cardputer.Display.drawLine(kPad, midY, leftEnd, midY, color);
+    M5Cardputer.Display.setFont(&fonts::FreeSerifBoldItalic9pt7b);
+    M5Cardputer.Display.setTextDatum(top_left);
+    M5Cardputer.Display.setTextColor(color, kBg);
+    M5Cardputer.Display.drawString(title, leftEnd + 4, 1);
+    int tw = M5Cardputer.Display.textWidth(title);
+    int rightStart = leftEnd + 4 + tw + 4;
+    M5Cardputer.Display.drawLine(rightStart, midY, kScreenW - kPad, midY, color);
+    M5Cardputer.Display.setFont(&fonts::Font2);
+}
+
 void drawStaticChrome() {
     M5Cardputer.Display.fillScreen(kBg);
 
@@ -111,7 +132,7 @@ enum class Decision { Transcribe, Delete };
 // delete) instead of a navigation picker -- one keystroke decides.
 Decision askWhatNext(uint32_t durMs, bool hardCapped) {
     M5Cardputer.Display.fillScreen(kBg);
-    boot_ui::sectionHeader("captured", 0x4FCA);
+    editorialHeader("captured", 0x4FCA);
 
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
@@ -195,7 +216,7 @@ Decision askWhatNext(uint32_t durMs, bool hardCapped) {
 
 void drawDecisionOutcome(const char* head, const char* line2, uint16_t headColor) {
     M5Cardputer.Display.fillScreen(kBg);
-    boot_ui::sectionHeader(head, headColor);
+    editorialHeader(head, headColor);
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(kIdle, kBg);
@@ -210,7 +231,7 @@ void drawDecisionOutcome(const char* head, const char* line2, uint16_t headColor
 // fillScreen so we don't flicker the unbuffered panel.
 void drawTranscribeFrame() {
     M5Cardputer.Display.fillScreen(kBg);
-    boot_ui::sectionHeader("transcribing", kAccent);
+    editorialHeader("transcribing", kAccent);
 
     int hy = kScreenH - kHintH;
     M5Cardputer.Display.drawLine(0, hy, kScreenW, hy, kDivider);
@@ -265,7 +286,7 @@ void drawTranscribeProgress(const transcribe::ProgressInfo& p) {
 
 void drawTranscribeSuccess(const String& text) {
     M5Cardputer.Display.fillScreen(kBg);
-    boot_ui::sectionHeader("got it", 0x4FCA);
+    editorialHeader("got it", 0x4FCA);
 
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
@@ -320,7 +341,7 @@ void drawTranscribeSuccess(const String& text) {
 
 void drawTranscribeFailure(const transcribe::Result& r) {
     M5Cardputer.Display.fillScreen(kBg);
-    boot_ui::sectionHeader("transcribe failed", 0xF884);
+    editorialHeader("transcribe failed", 0xF884);
 
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
@@ -361,12 +382,13 @@ void drawTranscribeFailure(const transcribe::Result& r) {
 void drawWorkingStatus(const char* line) {
     M5Cardputer.Display.fillRect(0, kStatusH + 1, kScreenW,
                                  kScreenH - kStatusH - kHintH - 1, kBg);
-    M5Cardputer.Display.setFont(&fonts::Font2);
+    M5Cardputer.Display.setFont(&fonts::FreeSerifBoldItalic9pt7b);
     M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextDatum(top_center);
     M5Cardputer.Display.setTextColor(kAccent, kBg);
-    int tw = M5Cardputer.Display.textWidth(line);
-    M5Cardputer.Display.setCursor((kScreenW - tw) / 2, 56);
-    M5Cardputer.Display.print(line);
+    M5Cardputer.Display.drawString(line, kScreenW / 2, 54);
+    M5Cardputer.Display.setTextDatum(top_left);
+    M5Cardputer.Display.setFont(&fonts::Font2);
 }
 
 void transcribeAndShow(const String& apiKey,

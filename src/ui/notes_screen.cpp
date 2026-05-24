@@ -579,8 +579,11 @@ void NotesScreen::renderRow(const NoteRow& r, int y, int lineH,
     _bodyCanvas.setCursor(rightX, y + 5);
     _bodyCanvas.print(right);
 
-    // Title in Font2
-    _bodyCanvas.setFont(&fonts::Font2);
+    // Title in the editorial serif italic from the launcher card.
+    // drawString + top_left datum forces the glyph top-left to (leftX,
+    // y+3); the font's intrinsic metrics don't have to match Font2.
+    _bodyCanvas.setFont(&fonts::FreeSerifBoldItalic9pt7b);
+    _bodyCanvas.setTextDatum(top_left);
     String title = r.title;
     int maxTitlePx = rightX - leftX - 6;
     while (_bodyCanvas.textWidth(title.c_str()) > maxTitlePx
@@ -590,19 +593,21 @@ void NotesScreen::renderRow(const NoteRow& r, int y, int lineH,
     if (title.length() < r.title.length()) title += ".";
     uint16_t color = highlighted ? kAccent : kIdle;
     _bodyCanvas.setTextColor(color, kBg);
-    _bodyCanvas.setCursor(leftX, y + 1);
-    _bodyCanvas.print(title);
+    _bodyCanvas.drawString(title, leftX, y + 3);
+    _bodyCanvas.setFont(&fonts::Font2);  // reset for callers
 }
 
 void NotesScreen::renderConfirmBody() {
     int y  = 12;
-    _bodyCanvas.setFont(&fonts::Font2);
     _bodyCanvas.setTextSize(1);
 
+    // Confirm question in the editorial serif italic. Centered.
+    _bodyCanvas.setFont(&fonts::FreeSerifBoldItalic9pt7b);
+    _bodyCanvas.setTextDatum(top_center);
     _bodyCanvas.setTextColor(kRed, kBg);
-    int qw = _bodyCanvas.textWidth(_confirmQ.c_str());
-    _bodyCanvas.setCursor((kScreenW - qw) / 2, y);
-    _bodyCanvas.print(_confirmQ);
+    _bodyCanvas.drawString(_confirmQ, kScreenW / 2, y);
+    _bodyCanvas.setTextDatum(top_left);
+    _bodyCanvas.setFont(&fonts::Font2);
     y += 22;
 
     if (_confirmDetail.length() > 0) {

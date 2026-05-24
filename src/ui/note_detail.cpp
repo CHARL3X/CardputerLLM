@@ -24,13 +24,17 @@ constexpr uint16_t kGreen  = 0x4FCA;
 
 void renderStatusRow(const String& title, int scrollLine, int totalLines) {
     M5Cardputer.Display.fillRect(0, 0, kScreenW, kStatusH, kBg);
-    M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
     int midY    = kStatusH / 2;
     int leftEnd = kPadX + 8;
     M5Cardputer.Display.drawLine(kPadX, midY, leftEnd, midY, kAccent);
+
+    // Note title in the editorial serif italic. top_left datum places
+    // the glyph top at y=0; the status row is 14 px tall so descenders
+    // brush the divider line but don't overflow noticeably.
+    M5Cardputer.Display.setFont(&fonts::FreeSerifBoldItalic9pt7b);
+    M5Cardputer.Display.setTextDatum(top_left);
     M5Cardputer.Display.setTextColor(kAccent, kBg);
-    M5Cardputer.Display.setCursor(kPadX + 12, 1);
     String shown = title;
     int maxTitlePx = kScreenW - 80;
     while (M5Cardputer.Display.textWidth(shown.c_str()) > maxTitlePx
@@ -38,7 +42,8 @@ void renderStatusRow(const String& title, int scrollLine, int totalLines) {
         shown.remove(shown.length() - 1);
     }
     if (shown.length() < title.length()) shown += ".";
-    M5Cardputer.Display.print(shown);
+    M5Cardputer.Display.drawString(shown, kPadX + 12, 0);
+    M5Cardputer.Display.setFont(&fonts::Font2);  // reset for callers
 
     if (totalLines > 0) {
         char ind[16];
@@ -84,12 +89,31 @@ void renderHintBar(bool atTop, bool atBottom,
     M5Cardputer.Display.setFont(&fonts::Font2);
 }
 
+// Editorial section header in the launcher-card serif italic.
+void editorialHeader(const char* title, uint16_t color) {
+    constexpr int kPad = 6;
+    constexpr int kH   = 18;
+    M5Cardputer.Display.fillRect(0, 0, kScreenW, kH, kBg);
+    M5Cardputer.Display.setTextSize(1);
+    int midY    = kH / 2;
+    int leftEnd = kPad + 10;
+    M5Cardputer.Display.drawLine(kPad, midY, leftEnd, midY, color);
+    M5Cardputer.Display.setFont(&fonts::FreeSerifBoldItalic9pt7b);
+    M5Cardputer.Display.setTextDatum(top_left);
+    M5Cardputer.Display.setTextColor(color, kBg);
+    M5Cardputer.Display.drawString(title, leftEnd + 4, 1);
+    int tw = M5Cardputer.Display.textWidth(title);
+    int rightStart = leftEnd + 4 + tw + 4;
+    M5Cardputer.Display.drawLine(rightStart, midY, kScreenW - kPad, midY, color);
+    M5Cardputer.Display.setFont(&fonts::Font2);
+}
+
 // Inline delete confirm. Direct-draw, static. Returns true if user said
 // yes. Consumes its own key release before returning so the next caller
 // doesn't see an immediate phantom press.
 bool askDeleteConfirm(const String& title) {
     M5Cardputer.Display.fillScreen(kBg);
-    boot_ui::sectionHeader("delete this note?", kRed);
+    editorialHeader("delete this note?", kRed);
 
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
@@ -151,7 +175,7 @@ bool askDeleteConfirm(const String& title) {
 
 void drawDeleted() {
     M5Cardputer.Display.fillScreen(kBg);
-    boot_ui::sectionHeader("deleted", kGreen);
+    editorialHeader("deleted", kGreen);
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(kIdle, kBg);

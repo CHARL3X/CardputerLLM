@@ -64,9 +64,30 @@ enum class Mode {
 
 // ---------------- preflight ----------------
 
+// Editorial section header in the launcher-card serif italic. Same
+// flanking-hairlines pattern as boot_ui::sectionHeader; used in the
+// Verbatim-mode screens so the editorial treatment carries through.
+void editorialHeader(const char* title, uint16_t color) {
+    constexpr int kPad = 6;
+    constexpr int kH   = 18;
+    M5Cardputer.Display.fillRect(0, 0, kScreenW, kH, kBg);
+    M5Cardputer.Display.setTextSize(1);
+    int midY    = kH / 2;
+    int leftEnd = kPad + 10;
+    M5Cardputer.Display.drawLine(kPad, midY, leftEnd, midY, color);
+    M5Cardputer.Display.setFont(&fonts::FreeSerifBoldItalic9pt7b);
+    M5Cardputer.Display.setTextDatum(top_left);
+    M5Cardputer.Display.setTextColor(color, kBg);
+    M5Cardputer.Display.drawString(title, leftEnd + 4, 1);
+    int tw = M5Cardputer.Display.textWidth(title);
+    int rightStart = leftEnd + 4 + tw + 4;
+    M5Cardputer.Display.drawLine(rightStart, midY, kScreenW - kPad, midY, color);
+    M5Cardputer.Display.setFont(&fonts::Font2);
+}
+
 bool runPreflight(int memoCount, uint32_t tokenEstimate) {
     M5Cardputer.Display.fillScreen(kBg);
-    boot_ui::sectionHeader("ask mode . ready?", kStatusAccent);
+    editorialHeader("ask mode . ready?", kStatusAccent);
 
     M5Cardputer.Display.setFont(&fonts::Font2);
     M5Cardputer.Display.setTextSize(1);
