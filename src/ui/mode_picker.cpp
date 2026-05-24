@@ -17,6 +17,7 @@
 #include "boot_ui.h"
 #include <M5Cardputer.h>
 #include <M5GFX.h>
+#include <math.h>
 
 namespace {
 
@@ -35,25 +36,107 @@ constexpr uint16_t kFaint  = 0x4208;
 // Mode brand colors. LLM keeps the original cassette amber so users
 // flashing from the CardputerLLM standalone get continuity; Verbatim
 // goes mint/teal to feel like a different tool.
-constexpr uint16_t kLlmAccent     = 0xFD60;  // amber
-constexpr uint16_t kLlmAccentDim  = 0x3940;  // amber at ~1/4 brightness (card tint)
-constexpr uint16_t kVoxAccent     = 0x07FF;  // pure cyan -- CRT phosphor vibe
-constexpr uint16_t kVoxAccentDim  = 0x01FF;  // cyan at low brightness
+constexpr uint16_t kLlmAccent     = 0xFD60;  // amber / orange (LLM outline)
+constexpr uint16_t kVoxAccent     = 0xFE40;  // golden yellow (Verbatim outline)
+
+// Complementary cool tone for the inset sheen + chevron. Both cards
+// share this so the warm outlines (the mode-tellers) read against a
+// unified cool interior. Steel-blue family -- the complement of the
+// warm amber/gold on the color wheel.
+//
+// Sheen uses the deeper muted shade; the chevron oscillates between
+// invisible (0x0000) and the lighter shade so the pulse reads as an
+// actual fade-in / fade-out, not a small brightness flicker.
+constexpr uint16_t kComplement      = 0x42BF;  // muted steel-blue (sheen)
+constexpr uint16_t kComplementLight = 0xBEFF;  // pale sky-blue (chevron peak)
+
+// Scale an RGB565 color's brightness uniformly. f in 0..255.
+uint16_t scaleColor(uint16_t c, uint8_t f) {
+    uint16_t r = (c >> 11) & 0x1F;
+    uint16_t g = (c >> 5)  & 0x3F;
+    uint16_t b = c         & 0x1F;
+    r = (r * f) / 255;
+    g = (g * f) / 255;
+    b = (b * f) / 255;
+    return (r << 11) | (g << 5) | b;
+}
+
+// Linearly blend two RGB565 colors. t in 0..255 (0 = a, 255 = b).
+uint16_t blend565(uint16_t a, uint16_t b, uint8_t t) {
+    int rA = (a >> 11) & 0x1F;
+    int gA = (a >> 5)  & 0x3F;
+    int bA = a         & 0x1F;
+    int rB = (b >> 11) & 0x1F;
+    int gB = (b >> 5)  & 0x3F;
+    int bB = b         & 0x1F;
+    int r = (rA * (255 - t) + rB * t) / 255;
+    int g = (gA * (255 - t) + gB * t) / 255;
+    int bl = (bA * (255 - t) + bB * t) / 255;
+    return (r << 11) | (g << 5) | bl;
+}
 
 struct Option {
     const char*       title;
     const char*       desc;
     uint16_t          accent;
-    uint16_t          accentDim;
     const lgfx::IFont* titleFont;
 };
 
 const Option kOptions[2] = {
     { "CardputerLLM", "chat with any LLM",
-      kLlmAccent, kLlmAccentDim, &fonts::FreeSansBold9pt7b },
+      kLlmAccent, &fonts::FreeSansBold9pt7b },
     { "Verbatim",     "voice notes + ask",
-      kVoxAccent, kVoxAccentDim, &fonts::FreeSerifBoldItalic9pt7b },
+      kVoxAccent, &fonts::FreeSerifBoldItalic9pt7b },
 };
+
+// Walk the 4 edges of a rectangle drawing each outline pixel with a
+// gradient color sampled along the (i+j)/(w+h-2) diagonal. Top-left
+// pixel gets `startColor`; bottom-right pixel gets `endColor`. Used
+// to give the card a pencil-thin, angle-lit outline.
+void drawGradientOutline(M5Canvas& c, int x, int y, int w, int h,
+                         uint16_t startColor, uint16_t endColor) {
+    int diag = (w + h - 2);
+    if (diag < 1) diag = 1;
+
+    // Top edge (j = 0)
+    for (int i = 0; i < w; i++) {
+        int t = (i * 255) / diag;
+        c.writePixel(x + i, y, blend565(startColor, endColor, t));
+    }
+    // Bottom edge (j = h - 1)
+    for (int i = 0; i < w; i++) {
+        int t = ((i + h - 1) * 255) / diag;
+        if (t > 255) t = 255;
+        c.writePixel(x + i, y + h - 1, blend565(startColor, endColor, t));
+    }
+    // Left edge (i = 0)
+    for (int j = 1; j < h - 1; j++) {
+        int t = (j * 255) / diag;
+        c.writePixel(x, y + j, blend565(startColor, endColor, t));
+    }
+    // Right edge (i = w - 1)
+    for (int j = 1; j < h - 1; j++) {
+        int t = ((j + w - 1) * 255) / diag;
+        if (t > 255) t = 255;
+        c.writePixel(x + w - 1, y + j, blend565(startColor, endColor, t));
+    }
+}
+
+// Inset sheen: fill the card interior with a subtle diagonal gradient,
+// brightest at the top-left corner, fading to black at the bottom-right.
+// Reads as a soft reflection across the card surface. Cheap pixel-fill
+// on the canvas (writePixel is RAM-only, ~50 ns per).
+void drawInsetSheen(M5Canvas& c, int x, int y, int w, int h, uint16_t accent) {
+    uint16_t base = scaleColor(accent, 56);  // ~22% brightness at top-left
+    int diag = (w + h - 2);
+    if (diag < 1) diag = 1;
+    for (int j = 1; j < h - 1; j++) {
+        for (int i = 1; i < w - 1; i++) {
+            int t = ((i + j) * 255) / diag;
+            c.writePixel(x + i, y + j, blend565(base, 0x0000, t));
+        }
+    }
+}
 
 void renderStatus() {
     M5Cardputer.Display.fillRect(0, 0, kScreenW, kStatusH, kBg);
@@ -92,17 +175,16 @@ void renderHint() {
 
 // Card layout inside the body region (101 px tall).
 //
-// FreeFonts 9pt7b have ~13 px cap height above baseline + ~5 px italic
-// descent below baseline = ~18 px visible vertical run. Plus a Font0
-// (8 px) subtitle and padding, a 42 px card holds it all without
-// collision.
+// Using drawString + top_left datum so the title's TOP-LEFT lands
+// exactly at the given coords -- no more guessing whether setCursor
+// means baseline or line-top for GFX fonts.
 //
-//   y=4  -> card 0 (LLM)
-//   y=51 -> card 1 (Verbatim)
-//   top/middle/bottom gaps 4/5/4 around two 42 px cards = 101 px exactly
-constexpr int kCard0Y = 4;
-constexpr int kCard1Y = 51;
-constexpr int kCardH  = 42;
+//   y=5  -> card 0 (LLM)
+//   y=53 -> card 1 (Verbatim)
+//   top 5 / card 40 / middle 8 / card 40 / bottom 8 = 101 px
+constexpr int kCard0Y = 5;
+constexpr int kCard1Y = 53;
+constexpr int kCardH  = 40;
 constexpr int kCardX  = 8;
 constexpr int kCardW  = kScreenW - 2 * kCardX;
 
@@ -110,41 +192,43 @@ void renderCard(M5Canvas& c, int idx, bool active, uint32_t animPhase) {
     const Option& opt = kOptions[idx];
     int y = (idx == 0) ? kCard0Y : kCard1Y;
 
-    uint16_t borderColor = active ? opt.accent : kFaint;
-
+    // Active card gets the inset sheen first (interior fill). The sheen
+    // uses the cool COMPLEMENT to the warm outline -- warm frame, cool
+    // fill, like a two-tone cover. Inactive card stays on pure black.
     if (active) {
-        c.fillRoundRect(kCardX, y, kCardW, kCardH, 5, opt.accentDim);
-    }
-    c.drawRoundRect(kCardX, y, kCardW, kCardH, 5, borderColor);
-    if (active) {
-        c.drawRoundRect(kCardX + 1, y + 1, kCardW - 2, kCardH - 2, 4,
-                        opt.accent);
+        drawInsetSheen(c, kCardX, y, kCardW, kCardH, kComplement);
     }
 
-    // Title: M5GFX places setCursor(x, y) at the BASELINE for GFX
-    // fonts. 9pt7b cap height ~13, italic descent ~5. We want the cap
-    // top to sit ~6 px below the card top, so baseline = y + 6 + 13 = y + 19.
-    // Descender bottoms out at y + 19 + 5 = y + 24.
+    // Pencil-thin outline masked on a diagonal gradient: bright accent
+    // at top-left, fading to invisible at bottom-right. Active card
+    // uses the full accent; inactive uses a softened version so it
+    // visually recedes but stays present.
+    uint16_t startColor = active ? opt.accent : scaleColor(opt.accent, 110);
+    drawGradientOutline(c, kCardX, y, kCardW, kCardH, startColor, 0x0000);
+
+    // Title with top_left datum -- TOP of text at (kCardX+10, y+4).
+    c.setTextDatum(top_left);
     c.setFont(opt.titleFont);
     c.setTextSize(1);
-    c.setTextColor(active ? opt.accent : kDim, active ? opt.accentDim : kBg);
-    c.setCursor(kCardX + 10, y + 19);
-    c.print(opt.title);
+    c.setTextColor(active ? opt.accent : kDim, kBg);
+    c.drawString(opt.title, kCardX + 10, y + 4);
 
-    // Subtitle: Font0 cursor places TOP-LEFT (bitmap font convention),
-    // 8 px tall. Sitting at y + 28 leaves a 4 px gap above the title's
-    // descenders and a 6 px gap below for the card bottom.
+    // Subtitle (Font0 bitmap).
     c.setFont(&fonts::Font0);
     c.setTextSize(1);
-    c.setTextColor(active ? kIdle : kDim, active ? opt.accentDim : kBg);
-    c.setCursor(kCardX + 10, y + 28);
-    c.print(opt.desc);
+    c.setTextColor(active ? kIdle : kDim, kBg);
+    c.drawString(opt.desc, kCardX + 10, y + 28);
 
-    // Active card: pulsing chevron, centered vertically.
+    // Chevron: sin-eased fade between invisible (kBg) and the lighter
+    // complement. Full fade-in / fade-out, 1.2 s period -- reads as a
+    // proper pulse rather than a small brightness wobble.
     if (active) {
         int chevX = kCardX + kCardW - 14;
         int chevY = y + kCardH / 2 - 5;
-        uint16_t cc = ((animPhase / 4) & 1) ? opt.accent : opt.accentDim;
+        float t    = (float)(millis() % 1200) / 1200.0f;
+        float ease = (sinf(t * 6.283185307f) + 1.0f) * 0.5f;  // 0..1 smooth
+        uint8_t bt = (uint8_t)(ease * 255.0f);
+        uint16_t cc = blend565(0x0000, kComplementLight, bt);
         c.fillTriangle(chevX, chevY,
                        chevX + 7, chevY + 5,
                        chevX, chevY + 10, cc);
