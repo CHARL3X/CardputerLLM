@@ -10,6 +10,7 @@
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <time.h>
+#include <math.h>
 
 namespace {
 
@@ -30,6 +31,31 @@ constexpr uint16_t kMuted        = 0x4208;
 constexpr uint16_t kRed          = 0xF884;
 
 constexpr int kRowH = 18;   // Font2 (16px) + 2px padding
+
+// Cool complement for the live-element accents -- same family as the
+// launcher card's chevron. Carries the launcher's visual vocabulary
+// into the app.
+constexpr uint16_t kLive       = 0xBEFF;  // pale sky blue at peak
+constexpr uint16_t kLiveDim    = 0x0000;  // fully off at trough
+
+uint16_t blend565(uint16_t a, uint16_t b, uint8_t t) {
+    int rA = (a >> 11) & 0x1F;
+    int gA = (a >> 5)  & 0x3F;
+    int bA = a         & 0x1F;
+    int rB = (b >> 11) & 0x1F;
+    int gB = (b >> 5)  & 0x3F;
+    int bB = b         & 0x1F;
+    int r = (rA * (255 - t) + rB * t) / 255;
+    int g = (gA * (255 - t) + gB * t) / 255;
+    int bl = (bA * (255 - t) + bB * t) / 255;
+    return (r << 11) | (g << 5) | bl;
+}
+
+uint8_t pulseEase(uint32_t periodMs) {
+    float t    = (float)(millis() % periodMs) / (float)periodMs;
+    float ease = (sinf(t * 6.283185307f) + 1.0f) * 0.5f;
+    return (uint8_t)(ease * 255.0f);
+}
 
 } // namespace
 
@@ -109,6 +135,19 @@ void NotesScreen::rescan() {
 
 void NotesScreen::tick() {
     pollKeyboard();
+
+    // Pulse the highlighted-row chevron + status-row live dot every
+    // 80 ms when there's something to animate. Only the regions that
+    // change get redrawn; renderBody/renderStatus are cheap.
+    static uint32_t lastAnim = 0;
+    if (millis() - lastAnim > 80) {
+        lastAnim = millis();
+        if (_mode == Mode::List || _mode == Mode::MultiSelect) {
+            if (!_rows.empty()) _bodyDirty = true;
+            _statusDirty = true;
+        }
+    }
+
     if (_statusDirty) { renderStatus(); _statusDirty = false; }
     if (_bodyDirty)   { renderBody();   _bodyDirty   = false; }
     if (_hintDirty)   { renderHint();   _hintDirty   = false; }
@@ -438,11 +477,16 @@ void NotesScreen::renderStatus() {
     M5Cardputer.Display.setCursor(rx, 2);
     M5Cardputer.Display.print(right);
 
-    // Persistent VOX brand badge -- always visible so the user knows
-    // they're in Verbatim mode (vs the LLM chat).
+    // Persistent VOX brand badge with a sin-eased "alive" dot.
+    // Editorial: a circle (vs LLM's terminal-style block).
     M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
     M5Cardputer.Display.setCursor(kPadX, 2);
     M5Cardputer.Display.print("VOX");
+    {
+        uint8_t bt = pulseEase(1600);
+        uint16_t dotColor = blend565(kLiveDim, kLive, bt);
+        M5Cardputer.Display.fillCircle(kPadX + 21, 6, 2, dotColor);
+    }
 
     // WiFi signal bars to the right of the brand badge.
     if (WiFi.status() == WL_CONNECTED) {
@@ -452,7 +496,7 @@ void NotesScreen::renderStatus() {
         if (rssi > -75) bars = 2;
         if (rssi > -65) bars = 3;
         if (rssi > -55) bars = 4;
-        int baseX = kPadX + 24;
+        int baseX = kPadX + 28;
         int baseY = 9;
         for (int b = 0; b < 4; b++) {
             int h = 2 + b;
@@ -502,6 +546,21 @@ void NotesScreen::renderEmptyBody() {
     int sw = _bodyCanvas.textWidth(sub);
     _bodyCanvas.setCursor((kScreenW - sw) / 2, 44);
     _bodyCanvas.print(sub);
+
+    // Editorial hairline below the wordmark, masked on a left-to-right
+    // gradient -- magazine masthead rule. Same vocabulary as the
+    // launcher card's gradient outline.
+    {
+        int hairY  = 60;
+        int hairX0 = 30;
+        int hairX1 = kScreenW - 30;
+        int span   = hairX1 - hairX0;
+        for (int i = 0; i < span; i++) {
+            uint8_t t  = (uint8_t)((i * 255) / (span - 1));
+            uint16_t c = blend565(kAccent, 0x0000, t);
+            _bodyCanvas.writePixel(hairX0 + i, hairY, c);
+        }
+    }
 
     _bodyCanvas.setFont(&fonts::Font0);
     _bodyCanvas.setTextColor(kStatusDim, kBg);
@@ -595,6 +654,19 @@ void NotesScreen::renderRow(const NoteRow& r, int y, int lineH,
     _bodyCanvas.setTextColor(color, kBg);
     _bodyCanvas.drawString(title, leftX, y + 3);
     _bodyCanvas.setFont(&fonts::Font2);  // reset for callers
+
+    // Living-element on the highlighted row: pulsing sky-blue chevron
+    // on the right edge. Same vocabulary as the launcher card. Fades
+    // fully in and out over 1.2 s.
+    if (highlighted) {
+        uint8_t bt = pulseEase(1200);
+        uint16_t cc = blend565(kLiveDim, kLive, bt);
+        int chevX = kScreenW - 10;
+        int chevY = y + (lineH / 2) - 4;
+        _bodyCanvas.fillTriangle(chevX, chevY,
+                                 chevX + 5, chevY + 4,
+                                 chevX, chevY + 8, cc);
+    }
 }
 
 void NotesScreen::renderConfirmBody() {

@@ -11,6 +11,36 @@
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <time.h>
+#include <math.h>
+
+namespace {
+
+// Cool complement for the live-element accent (terminal cursor-style
+// block next to the LLM badge). Mirrors the launcher's chevron
+// complement so the two surfaces share visual vocabulary.
+constexpr uint16_t kLive    = 0xBEFF;
+constexpr uint16_t kLiveDim = 0x0000;
+
+uint16_t blend565(uint16_t a, uint16_t b, uint8_t t) {
+    int rA = (a >> 11) & 0x1F;
+    int gA = (a >> 5)  & 0x3F;
+    int bA = a         & 0x1F;
+    int rB = (b >> 11) & 0x1F;
+    int gB = (b >> 5)  & 0x3F;
+    int bB = b         & 0x1F;
+    int r = (rA * (255 - t) + rB * t) / 255;
+    int g = (gA * (255 - t) + gB * t) / 255;
+    int bl = (bA * (255 - t) + bB * t) / 255;
+    return (r << 11) | (g << 5) | bl;
+}
+
+uint8_t pulseEase(uint32_t periodMs) {
+    float t    = (float)(millis() % periodMs) / (float)periodMs;
+    float ease = (sinf(t * 6.283185307f) + 1.0f) * 0.5f;
+    return (uint8_t)(ease * 255.0f);
+}
+
+} // namespace
 
 namespace {
 
@@ -948,11 +978,16 @@ void ChatScreen::renderStatus() {
         M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
         M5Cardputer.Display.print(hint);
     } else {
-        // Persistent LLM brand badge -- always visible so the user
-        // knows which mode they're in.
+        // Persistent LLM brand badge with a sin-eased "alive" block.
+        // Terminal voice: a block (vs Verbatim's editorial circle).
         M5Cardputer.Display.setTextColor(kStatusAccent, kBg);
         M5Cardputer.Display.setCursor(kPadX, 2);
         M5Cardputer.Display.print("LLM");
+        {
+            uint8_t bt = pulseEase(1600);
+            uint16_t blockColor = blend565(kLiveDim, kLive, bt);
+            M5Cardputer.Display.fillRect(kPadX + 20, 4, 4, 4, blockColor);
+        }
 
         // WiFi signal bars sit just right of the brand badge.
         if (WiFi.status() == WL_CONNECTED) {
@@ -962,7 +997,7 @@ void ChatScreen::renderStatus() {
             if (rssi > -75) bars = 2;
             if (rssi > -65) bars = 3;
             if (rssi > -55) bars = 4;
-            int baseX = kPadX + 24;
+            int baseX = kPadX + 28;
             int baseY = 9; // bottom of bars
             for (int b = 0; b < 4; b++) {
                 int h = 2 + b;
