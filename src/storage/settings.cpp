@@ -29,10 +29,17 @@ void setBootSound(bool v) { prefs.putBool(kBootSoundKey, v); }
 
 uint8_t lastMode() {
     uint8_t v = prefs.getUChar(kLastModeKey, 0);
-    if (v > 1) v = 0;
+    if (v > 2) v = 0;
     return v;
 }
 void setLastMode(uint8_t v) { prefs.putUChar(kLastModeKey, v); }
+
+uint32_t tetrisHighScore() {
+    return prefs.getUInt("tetris_hs", 0);
+}
+void setTetrisHighScore(uint32_t v) {
+    prefs.putUInt("tetris_hs", v);
+}
 
 int historyDepth() {
     int v = prefs.getInt(kHistDepthKey, 20);

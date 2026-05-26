@@ -18,9 +18,13 @@ void setWelcomed(bool v);
 bool bootSound();
 void setBootSound(bool v);
 
-// last app picked: 0 = LLM, 1 = Verbatim
+// last app picked: 0 = LLM, 1 = Verbatim, 2 = Tetris
 uint8_t lastMode();
 void setLastMode(uint8_t v);
+
+// ---- Tetris ----
+uint32_t tetrisHighScore();
+void     setTetrisHighScore(uint32_t v);
 
 // ---- LLM mode ----
 int  historyDepth();

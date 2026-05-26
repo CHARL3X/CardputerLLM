@@ -74,6 +74,7 @@ constexpr uint8_t kMicMagnify   = 32;    // M5Unified default is 16
 // are written to disk.
 constexpr int    kWarmupBlocks  = 10;   // 10 * 32 ms = ~320 ms
 constexpr uint32_t kSettleMs    = 150;  // brief analog-settle after PGA write
+constexpr uint32_t kCodecReadyMs = 80;  // wait for ES8311 to accept I2C after cold begin()
 
 // Editorial section header in the FreeSerifBoldItalic9pt7b serif --
 // same flanking-hairlines pattern as boot_ui::sectionHeader, but with
@@ -489,15 +490,25 @@ bool run(const String& apiKey,
         return false;
     }
 
+    // Cold boot path: ES8311 hasn't been powered up since reset, so its
+    // I2C interface needs a beat after Mic.begin() returns before it will
+    // honor a PGA register write. Without this, the first session records
+    // at PGA min; subsequent sessions are fine because the codec stays
+    // warm between Mic.end()/Mic.begin() cycles.
+    delay(kCodecReadyMs);
+
     // Mic.begin() ran M5Unified's _microphone_enabled_cb_cardputer_adv
     // which pinned ES8311 reg 0x14 = 0x10 (PGA min). Override now.
-    if (M5Cardputer.In_I2C.writeRegister8(kEs8311Addr, kAdcReg14, kAdcReg14Val,
-                                          400000)) {
-        Serial.printf("[record] es8311 pga: reg 0x%02X = 0x%02X (42 dB max)\n",
-                      kAdcReg14, kAdcReg14Val);
-    } else {
-        Serial.println("[record] WARN es8311 pga write failed; using digital gain only");
-    }
+    auto writePga = [](const char* tag) {
+        if (M5Cardputer.In_I2C.writeRegister8(kEs8311Addr, kAdcReg14, kAdcReg14Val,
+                                              400000)) {
+            Serial.printf("[record] es8311 pga %s: reg 0x%02X = 0x%02X (42 dB max)\n",
+                          tag, kAdcReg14, kAdcReg14Val);
+        } else {
+            Serial.printf("[record] WARN es8311 pga %s write failed\n", tag);
+        }
+    };
+    writePga("init");
 
     // Let the analog stage stabilize after the gain snap, then drain
     // the codec's startup transient out of the mic queue before the WAV
@@ -515,6 +526,11 @@ bool run(const String& apiKey,
                       kWarmupBlocks,
                       (unsigned)(kWarmupBlocks * kBlockSamples * 1000 / kSampleRate));
     }
+
+    // Re-assert PGA after the I2S pipeline has been running for a few
+    // hundred ms. If the cold-boot write got clobbered by a late codec
+    // init step, this catches it.
+    writePga("reassert");
 
     wav::WavWriter writer;
     if (!writer.begin(kPath, kSampleRate, 1, 16)) {

@@ -1,0 +1,18 @@
+# Cardputer 8MB layout v4 -- post-launcher cleanup.
+#
+# We're no longer a self-hosting OS that loads sub-apps. Either:
+#   (a) Running as a guest inside bmorcelli's Launcher (his partition
+#       table is in flash, ours is unused), or
+#   (b) Flashed standalone via `pio run -t upload` for direct use.
+#
+# For case (b) we only need a single large app partition. Single
+# `factory` subtype at the canonical 0x10000 offset, sized to fill
+# the rest of the 8MB chip after NVS + otadata reservation.
+#
+# otadata is kept around because the arduino-esp32 framework expects
+# it; it stays empty in the standalone-flash scenario.
+#
+# Name,    Type, SubType, Offset,   Size,    Flags
+nvs,       data, nvs,     0x9000,   0x5000,
+otadata,   data, ota,     0xe000,   0x2000,
+factory,   app,  factory, 0x10000,  0x7F0000,

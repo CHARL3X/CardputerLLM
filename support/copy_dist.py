@@ -10,7 +10,7 @@ def copy_dist(source, target, env):
     project_dir = env["PROJECT_DIR"]
     dist_dir = os.path.join(project_dir, "dist")
     os.makedirs(dist_dir, exist_ok=True)
-    name = "Cardputer.bin"
+    name = "CHARL3X.bin"
     dst = os.path.join(dist_dir, name)
     shutil.copy2(src, dst)
     size = os.path.getsize(dst)

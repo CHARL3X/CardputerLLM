@@ -14,6 +14,7 @@ namespace mode_picker {
 
 constexpr uint8_t kLLM      = 0;
 constexpr uint8_t kVerbatim = 1;
+constexpr uint8_t kTetris   = 2;
 
 uint8_t run(uint8_t defaultMode);
 

@@ -38,6 +38,7 @@ constexpr uint16_t kFaint  = 0x4208;
 // goes mint/teal to feel like a different tool.
 constexpr uint16_t kLlmAccent     = 0xFD60;  // amber / orange (LLM outline)
 constexpr uint16_t kVoxAccent     = 0xFE40;  // golden yellow (Verbatim outline)
+constexpr uint16_t kTetrisAccent  = 0x07E0;  // CRT phosphor green (Tetris outline)
 
 // Complementary cool tone for the inset sheen + chevron. Both cards
 // share this so the warm outlines (the mode-tellers) read against a
@@ -76,18 +77,21 @@ uint16_t blend565(uint16_t a, uint16_t b, uint8_t t) {
 }
 
 struct Option {
-    const char*       title;
-    const char*       desc;
-    uint16_t          accent;
+    const char*        title;
+    uint16_t           accent;
     const lgfx::IFont* titleFont;
 };
 
-const Option kOptions[2] = {
-    { "CardputerLLM", "chat with any LLM",
-      kLlmAccent, &fonts::FreeSansBold9pt7b },
-    { "Verbatim",     "voice notes + ask",
-      kVoxAccent, &fonts::FreeSerifBoldItalic9pt7b },
+// Each card's typography carries the mode's personality:
+//   LLM       sans bold        modern AI / chat
+//   Verbatim  serif italic     editorial / literary transcripts
+//   Tetris    mono bold        arcade terminal
+const Option kOptions[3] = {
+    { "CardputerLLM", kLlmAccent,    &fonts::FreeSansBold9pt7b },
+    { "Verbatim",     kVoxAccent,    &fonts::FreeSerifBoldItalic9pt7b },
+    { "Tetris",       kTetrisAccent, &fonts::FreeMonoBold9pt7b },
 };
+constexpr int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
 
 // Walk the 4 edges of a rectangle drawing each outline pixel with a
 // gradient color sampled along the (i+j)/(w+h-2) diagonal. Top-left
@@ -167,30 +171,27 @@ void renderHint() {
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(kDim, kBg);
     M5Cardputer.Display.setCursor(kPadX, y + 4);
-    M5Cardputer.Display.print(",/. switch    1/2 jump");
+    M5Cardputer.Display.print(",/. switch   1-3 jump");
     M5Cardputer.Display.setCursor(kPadX, y + 13);
     M5Cardputer.Display.print("[ret] launch the highlighted mode");
     M5Cardputer.Display.setFont(&fonts::Font2);
 }
 
-// Card layout inside the body region (101 px tall).
+// Card layout inside the body region (101 px tall). Three cards
+// stacked, 22 px each with 11 px gaps for breathing room.
 //
-// Using drawString + top_left datum so the title's TOP-LEFT lands
-// exactly at the given coords -- no more guessing whether setCursor
-// means baseline or line-top for GFX fonts.
-//
-//   y=5  -> card 0 (LLM)
-//   y=53 -> card 1 (Verbatim)
-//   top 5 / card 40 / middle 8 / card 40 / bottom 8 = 101 px
-constexpr int kCard0Y = 5;
-constexpr int kCard1Y = 53;
-constexpr int kCardH  = 40;
-constexpr int kCardX  = 8;
-constexpr int kCardW  = kScreenW - 2 * kCardX;
+//   y=7  / card 0 (LLM)       22 px
+//   y=40 / card 1 (Verbatim)  22 px
+//   y=73 / card 2 (Tetris)    22 px
+//   top 7 + 3*22 + 2*11 + bottom 6 = 7 + 66 + 22 + 6 = 101
+constexpr int kCardYs[] = { 7, 40, 73 };
+constexpr int kCardH    = 22;
+constexpr int kCardX    = 8;
+constexpr int kCardW    = kScreenW - 2 * kCardX;
 
 void renderCard(M5Canvas& c, int idx, bool active, uint32_t animPhase) {
     const Option& opt = kOptions[idx];
-    int y = (idx == 0) ? kCard0Y : kCard1Y;
+    int y = kCardYs[idx];
 
     // Active card gets the inset sheen first (interior fill). The sheen
     // uses the cool COMPLEMENT to the warm outline -- warm frame, cool
@@ -206,18 +207,13 @@ void renderCard(M5Canvas& c, int idx, bool active, uint32_t animPhase) {
     uint16_t startColor = active ? opt.accent : scaleColor(opt.accent, 110);
     drawGradientOutline(c, kCardX, y, kCardW, kCardH, startColor, 0x0000);
 
-    // Title with top_left datum -- TOP of text at (kCardX+10, y+4).
+    // Title only -- 22 px cards are too tight for a subtitle row,
+    // so the font choice itself does the personality work.
     c.setTextDatum(top_left);
     c.setFont(opt.titleFont);
     c.setTextSize(1);
     c.setTextColor(active ? opt.accent : kDim, kBg);
-    c.drawString(opt.title, kCardX + 10, y + 4);
-
-    // Subtitle (Font0 bitmap).
-    c.setFont(&fonts::Font0);
-    c.setTextSize(1);
-    c.setTextColor(active ? kIdle : kDim, kBg);
-    c.drawString(opt.desc, kCardX + 10, y + 28);
+    c.drawString(opt.title, kCardX + 12, y + 3);
 
     // Chevron: sin-eased fade between invisible (kBg) and the lighter
     // complement. Full fade-in / fade-out, 1.2 s period -- reads as a
@@ -240,7 +236,7 @@ void renderCard(M5Canvas& c, int idx, bool active, uint32_t animPhase) {
 namespace mode_picker {
 
 uint8_t run(uint8_t defaultMode) {
-    if (defaultMode > 1) defaultMode = 0;
+    if (defaultMode >= kOptionCount) defaultMode = 0;
     int sel = defaultMode;
 
     M5Cardputer.Display.setFont(&fonts::Font2);
@@ -263,8 +259,9 @@ uint8_t run(uint8_t defaultMode) {
     auto repaint = [&]() {
         if (!canvasOk) return;
         body.fillScreen(kBg);
-        renderCard(body, 0, sel == 0, animPhase);
-        renderCard(body, 1, sel == 1, animPhase);
+        for (int i = 0; i < kOptionCount; i++) {
+            renderCard(body, i, sel == i, animPhase);
+        }
         body.pushSprite(0, kStatusH);
     };
     repaint();
@@ -291,15 +288,18 @@ uint8_t run(uint8_t defaultMode) {
             if (c == ',' || c == ';') {
                 if (sel > 0) { sel--; dirty = true; }
             } else if (c == '.' || c == '/') {
-                if (sel < 1) { sel++; dirty = true; }
-            } else if (c == '1') {
+                if (sel < kOptionCount - 1) { sel++; dirty = true; }
+            } else if (c == '1' && kOptionCount > 0) {
                 if (sel != 0) { sel = 0; dirty = true; }
-            } else if (c == '2') {
+            } else if (c == '2' && kOptionCount > 1) {
                 if (sel != 1) { sel = 1; dirty = true; }
+            } else if (c == '3' && kOptionCount > 2) {
+                if (sel != 2) { sel = 2; dirty = true; }
+            } else if (c == '4' && kOptionCount > 3) {
+                if (sel != 3) { sel = 3; dirty = true; }
             }
         }
 
-        // ~80 ms anim tick for the chevron
         if (millis() - lastAnim > 80) {
             lastAnim = millis();
             animPhase++;
