@@ -1,4 +1,4 @@
-// Recording screen with VU + elapsed counter + 5-minute hard cap.
+// Recording screen with a tape-recorder inspired live UI + 5-minute cap.
 //
 // Audio path: M5Cardputer.Speaker.end() releases the ES8311 codec's
 // output side; M5Cardputer.Mic.begin() reconfigures it for input via
@@ -8,14 +8,15 @@
 //
 // Loop cadence: Mic.record() is blocking and returns when its buffer
 // fills. At 512 samples / 16 kHz that's ~32 ms per iteration -- naturally
-// paces the loop, gives us a 30 Hz VU update rate, and stays well under
+// paces the loop, gives us ~30 Hz render rate, and stays well under
 // the dma_buf_count * dma_buf_len = 1024-sample (~64 ms) internal mic
 // queue so we don't drop samples on a busy SD write.
 //
-// Rendering: 240 x 103 M5Canvas double-buffer for the body region. Status
-// row (right-aligned "REC") and hint bar are direct-draw once at entry.
-// Honors the rule from memory: never repaint via fillScreen on the bare
-// display at >1 Hz.
+// Rendering: full-screen 240x135 M5Canvas. Every frame redraws the
+// status bar, panel border, tape path + reels, spectrum, format strip,
+// mic meter, and hint bar into the sprite, then pushSprite(0,0) once.
+// Honors the rule from memory: never fillScreen the bare ST7789 at
+// > 1 Hz -- all motion lives inside the canvas.
 
 #include "record_screen.h"
 #include "../audio/wav_writer.h"
@@ -26,24 +27,65 @@
 #include "note_detail.h"
 #include <M5Cardputer.h>
 #include <M5GFX.h>
+#include <math.h>
 
 namespace {
 
 constexpr int kScreenW = 240;
 constexpr int kScreenH = 135;
-constexpr int kStatusH = 12;
+// 14 / 101 / 20 split: status bar, body, hint bar. Whole-canvas redraw
+// happens every frame so the status bar can blink the REC dot and tick
+// elapsed time without extra draw paths.
+constexpr int kStatusH = 14;
 constexpr int kHintH   = 20;
+constexpr int kBodyY   = kStatusH;
+constexpr int kBodyH   = kScreenH - kStatusH - kHintH;  // 101
 constexpr int kPadX    = 4;
 
 constexpr uint16_t kBg      = 0x0000;
-constexpr uint16_t kDivider = 0x2104;
+constexpr uint16_t kDivider = 0x2104;   // cool dark complement
+constexpr uint16_t kPanelBg = 0x0841;   // near-black with a hint of cool
 constexpr uint16_t kDim     = 0x6B4D;
-constexpr uint16_t kAccent  = 0xFE40;
+constexpr uint16_t kAccent  = 0xFE40;   // golden (Verbatim brand)
 constexpr uint16_t kIdle    = 0xEF7D;
 constexpr uint16_t kRed     = 0xF884;
+constexpr uint16_t kTapeAmb = 0x9281;   // duller amber for tape path
 constexpr uint16_t kVU      = 0x4FCA;
 constexpr uint16_t kVUWarn  = 0xFD00;
 constexpr uint16_t kVUClip  = 0xF884;
+constexpr uint16_t kSpecLo  = 0x4FCA;   // cool low band
+constexpr uint16_t kSpecMid = 0xFD60;   // amber mid
+constexpr uint16_t kSpecHi  = 0xF884;   // red top
+
+// Body panel (the "recorder face"). Rounded outer frame, inset spectrum
+// window, two reels flanking, mic meter under the spectrum.
+constexpr int kPanelX = 4;
+constexpr int kPanelY = 17;
+constexpr int kPanelW = 232;
+constexpr int kPanelH = 96;
+constexpr int kPanelR = 5;   // rounded corner radius
+
+// Tape reels. Centers chosen so the spectrum window sits in the gap.
+constexpr int kReelLX = 33;
+constexpr int kReelRX = 207;
+constexpr int kReelY  = 50;
+constexpr int kReelR  = 18;
+constexpr int kReelSpokes = 6;
+
+// Spectrum window (front layer, sits over the tape path).
+constexpr int kSpecX = 60;
+constexpr int kSpecY = 30;
+constexpr int kSpecW = 120;
+constexpr int kSpecH = 36;
+constexpr int kSpecBars = 14;
+constexpr int kSpecBarW = 5;     // 14 bars * 5 px + 13 gaps * 3 px = 109
+constexpr int kSpecGap  = 3;     // leaves ~5 px of breathing room each side
+
+// Mic level meter under the spectrum panel.
+constexpr int kMeterX = 18;
+constexpr int kMeterY = 80;
+constexpr int kMeterW = 204;
+constexpr int kMeterH = 6;
 
 constexpr uint32_t kHardCapMs   = 300000;          // 5 minutes
 constexpr uint32_t kWarnMs      = 270000;          // start fast flash @ 4:30
@@ -97,27 +139,222 @@ void editorialHeader(const char* title, uint16_t color) {
     M5Cardputer.Display.setFont(&fonts::Font2);
 }
 
-void drawStaticChrome() {
-    M5Cardputer.Display.fillScreen(kBg);
+// --- Tape-recorder face helpers. All draw into the supplied canvas; the
+// caller pushSprites once per frame. Keeping each helper small means the
+// per-frame draw order in run() reads as a composition recipe rather
+// than one long block of pixel math.
 
-    // Status row: "REC" right-aligned in red
-    M5Cardputer.Display.setFont(&fonts::Font0);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(kRed, kBg);
-    const char* label = "REC";
-    int lw = M5Cardputer.Display.textWidth(label);
-    M5Cardputer.Display.setCursor(kScreenW - kPadX - lw, 2);
-    M5Cardputer.Display.print(label);
-    M5Cardputer.Display.setFont(&fonts::Font2);
+void drawStatusBar(M5Canvas& c, uint32_t elapsedMs, bool dotOn, bool warn) {
+    c.fillRect(0, 0, kScreenW, kStatusH, kBg);
 
-    // Hint bar
-    int hintY = kScreenH - kHintH;
-    M5Cardputer.Display.drawLine(0, hintY, kScreenW, hintY, kDivider);
-    M5Cardputer.Display.setFont(&fonts::Font0);
-    M5Cardputer.Display.setTextColor(kDim, kBg);
-    M5Cardputer.Display.setCursor(kPadX, hintY + 6);
-    M5Cardputer.Display.print("any key to stop  .  5:00 hard cap");
-    M5Cardputer.Display.setFont(&fonts::Font2);
+    // Red dot (blinks) + "VERBATIM REC" label. Two-tone: dot is filled
+    // when on, hollow when off, so the blink is visible without flashing
+    // the entire region.
+    constexpr int kDotX = 7, kDotY = 7, kDotR = 3;
+    if (dotOn) c.fillCircle(kDotX, kDotY, kDotR, kRed);
+    else       c.drawCircle(kDotX, kDotY, kDotR, kRed);
+
+    c.setFont(&fonts::Font0);
+    c.setTextSize(1);
+    c.setTextColor(kRed, kBg);
+    c.setCursor(14, 4);
+    c.print("VERBATIM REC");
+
+    // Elapsed time right-aligned, in golden during normal play and in
+    // warn-yellow once we're in the last 30 s before the cap.
+    char tbuf[8];
+    uint32_t secs = elapsedMs / 1000;
+    snprintf(tbuf, sizeof(tbuf), "%u:%02u",
+             (unsigned)(secs / 60), (unsigned)(secs % 60));
+    c.setTextColor(warn ? kVUWarn : kAccent, kBg);
+    int tw = c.textWidth(tbuf);
+    c.setCursor(kScreenW - tw - kPadX, 4);
+    c.print(tbuf);
+
+    // Thin divider between status bar and body
+    c.drawLine(0, kStatusH - 1, kScreenW, kStatusH - 1, kDivider);
+}
+
+void drawHintBar(M5Canvas& c) {
+    int hy = kScreenH - kHintH;
+    c.fillRect(0, hy, kScreenW, kHintH, kBg);
+    c.drawLine(0, hy, kScreenW, hy, kDivider);
+
+    c.setFont(&fonts::Font0);
+    c.setTextSize(1);
+    c.setTextColor(kDim, kBg);
+
+    // Left: [any key] stop / save. Right: 5:00 cap. Two-line layout so
+    // both can use Font0 without overflowing the 240 px width on the
+    // brace characters.
+    c.setCursor(kPadX, hy + 5);
+    c.print("[any key] stop / save");
+
+    const char* cap = "5:00 cap";
+    int cw = c.textWidth(cap);
+    c.setCursor(kScreenW - cw - kPadX, hy + 5);
+    c.print(cap);
+}
+
+void drawPanelFrame(M5Canvas& c) {
+    // Outer rounded frame in dim cool. Reads as the recorder's body
+    // edge without screaming for attention.
+    c.drawRoundRect(kPanelX, kPanelY, kPanelW, kPanelH, kPanelR, kDim);
+}
+
+void drawTapePath(M5Canvas& c) {
+    // Two thin amber lines connecting reel centers (top + bottom of
+    // tape ribbon). The spectrum panel draws over the middle section
+    // later, so what's left visible is just the bits flanking the
+    // reels -- like a real tape exiting/entering each spool.
+    int y1 = kReelY - 3;
+    int y2 = kReelY + 3;
+    c.drawLine(kReelLX + kReelR, y1, kReelRX - kReelR, y1, kTapeAmb);
+    c.drawLine(kReelLX + kReelR, y2, kReelRX - kReelR, y2, kTapeAmb);
+}
+
+void drawReel(M5Canvas& c, int cx, int cy, int r, float angleRad) {
+    // Outer rim
+    c.drawCircle(cx, cy, r, kDim);
+    // Inner rim (gives the reel some depth without a heavy gradient)
+    c.drawCircle(cx, cy, r - 4, 0x3186);
+
+    // Spokes between hub and outer rim. cosf/sinf per spoke is fine --
+    // 6 floats * 2 ops per frame is sub-microsecond on ESP32-S3.
+    constexpr float kTwoPi = 6.28318531f;
+    int innerR = 4;
+    int outerR = r - 1;
+    for (int i = 0; i < kReelSpokes; i++) {
+        float a = angleRad + i * (kTwoPi / kReelSpokes);
+        int x1 = cx + (int)(cosf(a) * innerR);
+        int y1 = cy + (int)(sinf(a) * innerR);
+        int x2 = cx + (int)(cosf(a) * outerR);
+        int y2 = cy + (int)(sinf(a) * outerR);
+        c.drawLine(x1, y1, x2, y2, kAccent);
+    }
+
+    // Hub: filled golden disc with a single-pixel black bore so it
+    // reads as a hole rather than a button.
+    c.fillCircle(cx, cy, 3, kAccent);
+    c.drawPixel(cx, cy, kBg);
+}
+
+// Lightweight visualizer: phase-shifted sinusoids modulated by overall
+// mic energy. Animates with real audio (loud -> taller, quiet ->
+// shorter) without doing an FFT. Replaceable later by feeding actual
+// band energies in via `peakHi` and adding a side-channel for per-band
+// magnitudes -- isolated here so the swap is a one-function change.
+void drawSpectrum(M5Canvas& c, int16_t peakHi, uint32_t tMs) {
+    // Inset window: filled dark panel + thin border. Subtle horizontal
+    // mid-rule for a "tape head" baseline feel.
+    c.fillRect(kSpecX, kSpecY, kSpecW, kSpecH, kPanelBg);
+    c.drawRect(kSpecX, kSpecY, kSpecW, kSpecH, kDim);
+    int midY = kSpecY + kSpecH - 1;
+    c.drawLine(kSpecX + 1, midY, kSpecX + kSpecW - 2, midY, kDivider);
+
+    float energy = (float)peakHi / (float)INT16_MAX;
+    if (energy < 0.05f) energy = 0.05f;   // idle "noise floor" visual
+
+    float tSec = (float)tMs / 1000.0f;
+
+    // Center the bar group horizontally inside the window
+    int barsW = kSpecBars * kSpecBarW + (kSpecBars - 1) * kSpecGap;
+    int startX = kSpecX + (kSpecW - barsW) / 2;
+    int maxH   = kSpecH - 4;       // 2 px padding top + bottom
+    int baseY  = kSpecY + kSpecH - 2;
+
+    for (int i = 0; i < kSpecBars; i++) {
+        // Each bar gets a different phase + slightly different frequency
+        // so the bars don't all rise/fall in unison.
+        float phase = i * 0.55f;
+        float freq  = 2.2f + (i % 3) * 0.7f;
+        float wave  = 0.5f + 0.5f * sinf(tSec * freq + phase);
+        float mag   = energy * (0.25f + 0.85f * wave);
+        if (mag > 1.0f) mag = 1.0f;
+
+        int barH = (int)(mag * maxH);
+        if (barH < 1) barH = 1;
+
+        uint16_t col = kSpecLo;
+        if (mag > 0.45f) col = kSpecMid;
+        if (mag > 0.78f) col = kSpecHi;
+
+        int bx = startX + i * (kSpecBarW + kSpecGap);
+        int by = baseY - barH;
+        c.fillRect(bx, by, kSpecBarW, barH, col);
+    }
+}
+
+void drawFormatStrip(M5Canvas& c, const char* filename) {
+    // Strip sits between the panel top and the spectrum window. Three
+    // pieces: small REC badge (filled red rect), filename, format spec.
+    int y = kPanelY + 4;
+
+    // [REC] badge
+    constexpr int kBadgeW = 22;
+    constexpr int kBadgeH = 9;
+    c.fillRect(kPanelX + 6, y, kBadgeW, kBadgeH, kRed);
+    c.setFont(&fonts::Font0);
+    c.setTextSize(1);
+    c.setTextColor(kBg, kRed);
+    c.setCursor(kPanelX + 9, y + 2);
+    c.print("REC");
+
+    // Filename: kept short to avoid colliding with the format string on
+    // the right. The actual on-disk WAV is a hidden scratch file; the
+    // user-visible name only exists after Save, so this is a placeholder.
+    c.setTextColor(kIdle, kBg);
+    c.setCursor(kPanelX + 6 + kBadgeW + 6, y + 2);
+    c.print(filename);
+
+    // Format spec right-aligned. "16k . 16b . mono" reads as a stack
+    // of mono-spaced facts rather than a sentence.
+    c.setTextColor(kDim, kBg);
+    const char* fmt = "16k . 16b . mono";
+    int fw = c.textWidth(fmt);
+    c.setCursor(kPanelX + kPanelW - fw - 6, y + 2);
+    c.print(fmt);
+}
+
+void drawMicMeter(M5Canvas& c, int16_t peakHi) {
+    c.drawRect(kMeterX, kMeterY, kMeterW, kMeterH, kDim);
+    int inner = kMeterW - 2;
+    int fill = (int)((int32_t)peakHi * inner / INT16_MAX);
+    if (fill < 0) fill = 0;
+    if (fill > inner) fill = inner;
+    uint16_t fc = kVU;
+    if (peakHi > (INT16_MAX * 7) / 8)   fc = kVUWarn;
+    if (peakHi > (INT16_MAX * 19) / 20) fc = kVUClip;
+    if (fill > 0) c.fillRect(kMeterX + 1, kMeterY + 1, fill, kMeterH - 2, fc);
+
+    // Tiny "MIC" label to the left of the meter so the bar has a meaning.
+    c.setFont(&fonts::Font0);
+    c.setTextSize(1);
+    c.setTextColor(kDim, kBg);
+    int labelY = kMeterY + kMeterH + 2;
+    c.setCursor(kMeterX, labelY);
+    c.print("mic");
+    // Right-side dB-ish marker so the right edge of the bar means
+    // something. 0 dBFS-shaped, not calibrated.
+    const char* edge = "0 dB";
+    int ew = c.textWidth(edge);
+    c.setCursor(kMeterX + kMeterW - ew, labelY);
+    c.print(edge);
+}
+
+// Composes the whole recorder face. Order matters: panel frame and tape
+// path go down first, then reels (which draw over the tape ends), then
+// the spectrum window (which sits over the tape's middle section), then
+// format strip (top of panel) and mic meter (bottom of panel).
+void drawRecordingPanel(M5Canvas& c, const char* filename, int16_t peakHi,
+                        uint32_t tMs, float reelAngle) {
+    drawPanelFrame(c);
+    drawTapePath(c);
+    drawReel(c, kReelLX, kReelY, kReelR, reelAngle);
+    drawReel(c, kReelRX, kReelY, kReelR, reelAngle);
+    drawSpectrum(c, peakHi, tMs);
+    drawFormatStrip(c, filename);
+    drawMicMeter(c, peakHi);
 }
 
 // Forward declaration: drawError is defined later in this namespace,
@@ -540,19 +777,22 @@ bool run(const String& apiKey,
         return false;
     }
 
+    // Full-screen sprite -- one fillScreen-equivalent per frame happens
+    // in RAM, never on the bare ST7789. ~64 KB at 16-bit color depth.
     M5Canvas body(&M5Cardputer.Display);
     body.setColorDepth(16);
-    int bodyH = kScreenH - kStatusH - kHintH;
-    bool canvasOk = body.createSprite(kScreenW, bodyH);
+    bool canvasOk = body.createSprite(kScreenW, kScreenH);
     if (canvasOk) {
         body.setFont(&fonts::Font2);
         body.setTextSize(1);
     } else {
         Serial.printf("[record] WARN canvas alloc %dx%d failed; direct draw fallback\n",
-                      kScreenW, bodyH);
+                      kScreenW, kScreenH);
+        // Clear the display once so the previous screen doesn't bleed
+        // through during the recording session.
+        M5Cardputer.Display.fillScreen(kBg);
     }
 
-    drawStaticChrome();
     Serial.printf("[record] heap pre-loop free=%u min=%u\n",
                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
 
@@ -602,54 +842,27 @@ bool run(const String& apiKey,
             hardCapped  = true;
         }
 
-        if (canvasOk && millis() - lastRender >= 33) {
+        if (canvasOk && millis() - lastRender >= 40) {
             lastRender = millis();
             bool warn  = elapsed >= kWarnMs;
 
-            body.fillScreen(kBg);
-            body.drawLine(0, 0, kScreenW, 0, kDivider);
-
-            // Blink dot, 2 Hz normally, 4 Hz in warn window
+            // Dot blink: 2 Hz normal, 4 Hz inside the warn window so the
+            // user feels the imminent cap.
             uint32_t halfPeriod = warn ? 125 : 250;
             bool     dotOn      = ((millis() / halfPeriod) & 1) == 0;
-            int      dotX       = kPadX + 8;
-            int      dotY       = 16;
-            if (dotOn) body.fillCircle(dotX, dotY, 6, kRed);
-            else       body.drawCircle(dotX, dotY, 6, kRed);
 
-            body.setFont(&fonts::Font2);
-            body.setTextSize(1);
-            body.setTextColor(warn ? kVUWarn : kIdle, kBg);
-            body.setCursor(dotX + 14, 10);
-            body.print(warn ? "REC . warn" : "recording");
+            // Reels rotate continuously at ~90 deg/sec. Tying to elapsed
+            // rather than absolute millis means the reel orientation is a
+            // function of how much tape has rolled, not wall-clock time.
+            constexpr float kReelOmega = 1.5708f;  // PI/2 rad/sec
+            float reelAngle = (elapsed / 1000.0f) * kReelOmega;
 
-            // Big elapsed counter (Font2 textSize 3 -> ~24 px tall)
-            uint32_t secs = elapsed / 1000;
-            char tbuf[8];
-            snprintf(tbuf, sizeof(tbuf), "%02u:%02u",
-                     (unsigned)(secs / 60), (unsigned)(secs % 60));
-            body.setTextSize(3);
-            int tw = body.textWidth(tbuf);
-            body.setTextColor(warn ? kVUWarn : kAccent, kBg);
-            body.setCursor((kScreenW - tw) / 2, 32);
-            body.print(tbuf);
-            body.setTextSize(1);
+            body.fillScreen(kBg);
+            drawStatusBar(body, elapsed, dotOn, warn);
+            drawRecordingPanel(body, "recording.wav", peakHi, millis(), reelAngle);
+            drawHintBar(body);
 
-            // VU meter
-            int vuX = kPadX + 4;
-            int vuY = 76;
-            int vuH = 10;
-            int vuW = kScreenW - vuX - kPadX - 4;
-            body.drawRect(vuX - 1, vuY - 1, vuW + 2, vuH + 2, kDim);
-            int fill = (int)((int32_t)peakHi * vuW / INT16_MAX);
-            if (fill < 0) fill = 0;
-            if (fill > vuW) fill = vuW;
-            uint16_t fc = kVU;
-            if (peakHi > (INT16_MAX * 7) / 8)   fc = kVUWarn;
-            if (peakHi > (INT16_MAX * 19) / 20) fc = kVUClip;
-            if (fill > 0) body.fillRect(vuX, vuY, fill, vuH, fc);
-
-            body.pushSprite(0, kStatusH);
+            body.pushSprite(0, 0);
         }
     }
 
