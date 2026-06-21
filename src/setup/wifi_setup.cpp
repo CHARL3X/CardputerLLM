@@ -286,9 +286,28 @@ namespace wifi_setup {
 
 std::vector<ScanResult> scanNow(bool showUI) {
     if (showUI) drawScanning();
-    WiFi.disconnect(true, false);
+
+    // Robust radio bring-up. When CHARL3X is chain-booted from a launcher
+    // (or after any prior WiFi session) the PHY can come up in a state
+    // where a single immediate scan returns 0 results even though networks
+    // are present. Fully cycle the radio OFF->STA with a settle delay, then
+    // retry the scan a couple of times before giving up -- one cold scan is
+    // not reliable. (The previous code did disconnect(true)+mode(STA)+scan
+    // back-to-back with no settle, which only worked on a clean cold boot.)
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
     WiFi.mode(WIFI_STA);
+    WiFi.disconnect(false);
+    delay(200);
+
     int n = WiFi.scanNetworks(false, false);
+    for (int attempt = 0; attempt < 2 && n <= 0; attempt++) {
+        WiFi.scanDelete();
+        delay(400);
+        n = WiFi.scanNetworks(false, false);
+    }
+
     std::vector<ScanResult> result;
     if (n > 0) {
         for (int i = 0; i < n; i++) {
